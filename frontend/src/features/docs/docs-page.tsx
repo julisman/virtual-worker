@@ -63,7 +63,7 @@ const CATEGORIES: Category[] = [
     title: "Get Started",
     sections: [
       { id: "overview", title: "What is Virtual Worker", icon: BookIcon, keywords: "virtual worker intro overview local llm offline serve debug agents" },
-      { id: "quickstart", title: "Quick Start", icon: RocketIcon, keywords: "run dev.sh setup install bootstrap uv node homebrew llama.cpp first model activate ports 5173 8888 8080" },
+      { id: "quickstart", title: "Quick Start", icon: RocketIcon, keywords: "run dev.sh vw start stop status logs service daemon setup install bootstrap uv node homebrew llama.cpp first model activate ports 5173 8888 8889 8080 8081" },
       { id: "architecture", title: "How It Works", icon: ArchIcon, keywords: "architecture gateway backend fastapi frontend react upstream model server data app.db managed mode" },
     ],
   },
@@ -81,7 +81,7 @@ const CATEGORIES: Category[] = [
   {
     title: "Channels",
     sections: [
-      { id: "channels", title: "Chat Channels", icon: ChannelsIcon, keywords: "whatsapp telegram discord slack channel pair qr code linked device cloud api webhook dm policy pairing allowlist group mention binding route conversation channel_send" },
+      { id: "channels", title: "Chat Channels", icon: ChannelsIcon, keywords: "whatsapp telegram botfather bot token discord slack channel pair qr code linked device cloud api webhook dm policy pairing allowlist group mention binding route conversation channel_send" },
     ],
   },
   {
@@ -222,10 +222,15 @@ const CONTENT: Record<string, React.ReactNode> = {
   quickstart: (
     <>
       <P>From a fresh clone, the launcher bootstraps everything on first run (backend virtualenv + deps, frontend deps, llama.cpp via Homebrew, and <Code>mlx-lm</Code> / <Code>mlx-vlm</Code> on Apple Silicon), then starts the backend and frontend together:</P>
-      <Pre>{`./dev.sh
+      <Pre>{`./dev.sh                      # hot-reload dev profile
 #   web   → http://localhost:5173
-#   api   → http://127.0.0.1:8888   (docs: /docs)
-#   llama → http://127.0.0.1:8080/v1   (backend-managed)`}</Pre>
+#   api   → http://127.0.0.1:8889   (docs: /docs)
+#   llama → http://127.0.0.1:8081/v1   (backend-managed)
+
+./vw start                    # always-on service (built UI + API on one port)
+#   app   → http://127.0.0.1:8888   (model server on :8080)
+./vw status · ./vw logs -f · ./vw restart · ./vw stop`}</Pre>
+      <P><Term>Service mode</Term> is how you run a worker that answers on WhatsApp or Telegram all day: the backend runs detached with automatic restarts and keeps running after you close the terminal. Dev and service use different default ports so both can run at once.</P>
       <P>Prerequisites it can't install for you — it prints the exact command if any is missing:</P>
       <Bullets items={[
         <><Term>uv</Term> (Python toolchain), <Term>Node / npm</Term>, and <Term>Homebrew</Term> (for llama.cpp).</>,
@@ -243,16 +248,16 @@ const CONTENT: Record<string, React.ReactNode> = {
   ),
   architecture: (
     <>
-      <P>Virtual Worker is three local processes that <Code>./dev.sh</Code> starts together: the <Term>frontend</Term> (React + Vite), the <Term>backend</Term> (FastAPI on <Code>:8888</Code>), and an <Term>upstream model server</Term> (llama.cpp / MLX on <Code>:8080</Code> by default).</P>
+      <P>Virtual Worker is three local processes that <Code>./dev.sh</Code> starts together: the <Term>frontend</Term> (React + Vite), the <Term>backend</Term> (FastAPI on <Code>:8889</Code> in dev, <Code>:8888</Code> as a service), and an <Term>upstream model server</Term> (llama.cpp / MLX on <Code>:8081</Code> in dev, <Code>:8080</Code> as a service). In service mode (<Code>./vw start</Code>) the backend also serves the built UI, so there is one port.</P>
       <Pre>{`Browser (:5173)
   React app — sidebar nav + feature pages
-        │  Vite proxies /api, /v1, /v1beta → :8888
+        │  Vite proxies /api, /v1, /v1beta → :8889 (dev)
         ▼
-Backend — FastAPI (:8888)
+Backend — FastAPI (:8889 dev · :8888 service)
   ApiDebugMiddleware  ── tees a bounded copy of every LLM call → app.db
   /v1/* /v1beta/*     ── OpenAI · Anthropic · Responses · Gemini gateway
   /api/*              ── chat, hub, runtime, agents, tokens …
-        │  VW_UPSTREAM_URL (default :8080)
+        │  VW_UPSTREAM_URL (default :8081 dev · :8080 service)
         ▼
 Upstream model server — llama.cpp / MLX / vLLM / Ollama / remote API`}</Pre>
       <P><Term>Managed mode</Term> (the default) means the backend itself starts, stops, and switches the inference server when you activate a model — so there's one server at a time and it survives backend reloads. Set <Code>VW_MANAGED_LLAMA=0</Code> (or point <Code>VW_UPSTREAM_URL</Code> at your own server) to manage it yourself.</P>
@@ -379,6 +384,7 @@ Step-by-step markdown the agent follows…`}</Pre>
         <>When the badge shows <Term>Connected</Term>, send yourself a test message or just write to the number from another phone.</>,
       ]} />
       <P>This transport uses an unofficial, open-source client library (a small Node sidecar the backend manages). Use a dedicated number and accept WhatsApp's terms. If the card says the bridge isn't installed, run <Code>npm install</Code> inside <Code>backend/channels/whatsapp/bridge</Code> (setup.sh does this for you).</P>
+      <P><Term>Telegram</Term> — message <Term>@BotFather</Term> in Telegram, send <Code>/newbot</Code>, copy the token, then <Term>Channels → Connect a channel → Telegram</Term> and paste it. The bot long-polls the Bot API, so no public URL is needed. In groups, add the bot and either @mention it or reply to one of its messages (Telegram's privacy mode hides other messages unless the bot is a group admin).</P>
       <P><Term>WhatsApp (Cloud API)</Term> — the official Business Platform. You need a Meta app, a business phone number id, an access token, the app secret, and a <Term>public HTTPS URL</Term>. Paste the webhook URL shown on the card into Meta's webhook settings with your verify token; signatures are checked on every event.</P>
       <P><Term>Who may talk to the agent</Term></P>
       <KV rows={[
@@ -441,13 +447,13 @@ Step-by-step markdown the agent follows…`}</Pre>
         [<>Antigravity / Gemini SDK</>, "Gemini → POST /v1beta/models/{model}:generateContent"],
       ]} />
       <P>The page shows live <Term>upstream status</Term> and the resolved model, plus a copy-paste setup card for each client. If it says the upstream isn't detected, activate a model in <Term>Models</Term> first (or start your own server).</P>
-      <P><Term>Pointing a client</Term> generally means setting its base URL to <Code>http://localhost:8888</Code> and a token (see API Tokens). For Claude Code that's <Code>ANTHROPIC_BASE_URL</Code>; for Codex it's a <Code>~/.codex/config.toml</Code> snippet with <Code>wire_api="responses"</Code>; for Gemini it's the SDK's <Code>base_url</Code>. Each card has a <Term>Copy</Term> button.</P>
+      <P><Term>Pointing a client</Term> generally means setting its base URL to the one shown on the Connect page (<Code>http://localhost:8888</Code> for the service, <Code>:8889</Code> in dev) and a token (see API Tokens). For Claude Code that's <Code>ANTHROPIC_BASE_URL</Code>; for Codex it's a <Code>~/.codex/config.toml</Code> snippet with <Code>wire_api="responses"</Code>; for Gemini it's the SDK's <Code>base_url</Code>. Each card has a <Term>Copy</Term> button.</P>
       <Tip>Map a client's vendor model id to your local model with <Code>VW_MODEL_MAP</Code> (JSON) or a single <Code>VW_DEFAULT_MODEL</Code> — so a client asking for "claude-3-5-sonnet" transparently hits your local model.</Tip>
     </>
   ),
   gateway: (
     <>
-      <P>Under the Connect page is an OpenAI-compatible <Term>gateway</Term>. Anything you can do with an OpenAI client works against <Code>http://localhost:8888/v1</Code>:</P>
+      <P>Under the Connect page is an OpenAI-compatible <Term>gateway</Term>. Anything you can do with an OpenAI client works against <Code>http://localhost:8888/v1</Code> (service) or <Code>:8889/v1</Code> (dev):</P>
       <KV rows={[
         [<>/v1/chat/completions</>, "Chat — byte-for-byte proxy to the upstream (no translation)."],
         [<>/v1/completions</>, "Legacy text completions."],

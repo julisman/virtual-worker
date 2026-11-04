@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+import channels.builtin  # noqa: F401  (registers adapters for the catalog)
 from channels.base import registry
 from channels.manager import manager
 from storage import agent_store, chat_channel_store as store

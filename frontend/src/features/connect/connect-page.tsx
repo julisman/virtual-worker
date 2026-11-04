@@ -130,7 +130,10 @@ export function ConnectPage() {
   // Clients connect to the backend (the gateway), not the Vite dev server.
   const base = useMemo(() => {
     const origin = window.location.origin;
-    return origin.includes(":5173") ? origin.replace(":5173", ":8888") : origin;
+    // In dev the page is served by Vite; point clients straight at the backend port.
+    const devBackend = import.meta.env.VITE_BACKEND_PORT || "8889";
+    return origin.includes(`:${import.meta.env.VITE_FRONTEND_PORT || "5173"}`)
+      ? origin.replace(/:\d+$/, `:${devBackend}`) : origin;
   }, []);
 
   const activeTokens = tokens.filter((t) => !t.revoked && !t.expired);

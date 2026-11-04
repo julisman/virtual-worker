@@ -16,9 +16,13 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-export LLAMA_PORT="${LLAMA_PORT:-8080}"
-BACKEND_PORT="${BACKEND_PORT:-8888}"
-FRONTEND_PORT="${FRONTEND_PORT:-5173}"
+# Dev ports are offset from the service ports (./vw start → :8888 / :8080) so a
+# hot-reload dev instance can run next to the always-on one.
+export LLAMA_PORT="${LLAMA_PORT:-8081}"
+export BACKEND_PORT="${BACKEND_PORT:-8889}"
+export FRONTEND_PORT="${FRONTEND_PORT:-5173}"
+export VITE_BACKEND_PORT="$BACKEND_PORT"
+export VITE_FRONTEND_PORT="$FRONTEND_PORT"
 export LLAMA_CTX="${LLAMA_CTX:-32768}"   # coding agents send ~25k-token prompts
 export LLAMA_NGL="${LLAMA_NGL:-99}"   # offload all layers to Metal GPU
 export LLAMA_MODEL="${LLAMA_MODEL:-}"   # optional: a GGUF to load on startup

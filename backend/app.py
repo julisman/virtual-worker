@@ -155,7 +155,7 @@ async def _startup():
         logging.getLogger(__name__).warning("trigger engine start failed", exc_info=True)
     # Chat channels — start every enabled account's adapter (dials out; no inbound port).
     try:
-        import channels.whatsapp  # noqa: F401  (registers adapters)
+        import channels.builtin  # noqa: F401  (registers adapters)
         from channels.manager import manager as channel_manager
         channel_manager.start()
     except Exception:
@@ -189,3 +189,29 @@ async def _shutdown():
 @app.get("/health")
 async def health():
     return {"status": "ok", "app": "virtual-worker"}
+
+
+# --- Built UI (service mode) ------------------------------------------------- #
+# With VW_SERVE_UI=1 (set by `vw start`) and a frontend build present, serve the
+# single-page app from this same origin so one port is the whole product. API,
+# gateway and docs paths are registered above and therefore win; everything
+# else falls back to index.html (client-side routing). Dev uses Vite instead.
+import os as _os
+from pathlib import Path as _Path
+
+_UI_DIR = _Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _os.environ.get("VW_SERVE_UI", "0") not in ("0", "false", "False") and (_UI_DIR / "index.html").exists():
+    from fastapi import HTTPException as _HTTPException
+    from fastapi.responses import FileResponse as _FileResponse
+    from fastapi.staticfiles import StaticFiles as _StaticFiles
+
+    app.mount("/assets", _StaticFiles(directory=str(_UI_DIR / "assets")), name="ui-assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def _spa(path: str):
+        if path.startswith(("api/", "v1/", "v1beta/")) or path in ("docs", "openapi.json", "redoc"):
+            raise _HTTPException(404)
+        candidate = (_UI_DIR / path).resolve()
+        if path and candidate.is_file() and str(candidate).startswith(str(_UI_DIR.resolve())):
+            return _FileResponse(str(candidate))
+        return _FileResponse(str(_UI_DIR / "index.html"))

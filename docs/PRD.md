@@ -455,8 +455,8 @@ external channel; capture and background loops are best-effort and never crash t
 | **M2 Board, schedules, delivery** | Board, activity, duty worker, cron and one-time schedules, file and webhook triggers, delivery targets (webhook, notification, email) and audit | A worker on duty works a board and delivers a result on schedule |
 | **M3 WhatsApp channel** — **implemented 2026-11-04** | Channel plugin interface, WhatsApp linked-device transport with QR pairing, policies, bindings, per-conversation sessions, media, outbound send tool, Cloud API transport | Message a worker from a phone; reply in the same chat; allow-list enforced; no public host |
 | **M4 Templates and knowledge** | Template format, gallery, deploy, export/import, knowledge bases, wikis, backup/restore | Deploy a Customer Support Rep that answers from uploaded docs in one sitting |
-| **M5 More channels and teams** | Telegram, Discord, Slack adapters; delegation and inbox flow-back; custom tool builder; analytics; BYOK providers and gateway | Two workers collaborate on a delegated task from a group chat |
-| **M6 Packaging and trust** | Service mode, desktop build, team mode with accounts and audit, security hardening pass | Runs unattended for a week; passes the security checklist |
+| **M5 More channels and teams** — Telegram shipped 2026-11-04 | Telegram, Discord, Slack adapters; delegation and inbox flow-back; custom tool builder; analytics; BYOK providers and gateway | Two workers collaborate on a delegated task from a group chat |
+| **M6 Packaging and trust** — service mode shipped 2026-11-04 (`./vw`) | Service mode, desktop build, team mode with accounts and audit, security hardening pass | Runs unattended for a week; passes the security checklist |
 | **Later** | Fine-tuning from feedback, evaluation suites, voice, browser control and flow recorder, case management for support teams, hosted template index | |
 
 ## 14. Risks and mitigations
@@ -495,8 +495,8 @@ external channel; capture and background loops are best-effort and never crash t
   protocol; the backend spawns and supervises it like the model server. Chosen because
   Node is already a prerequisite, the unofficial library stays isolated from the Python
   core, and a crash can never take the backend down.
-- **D5 Channel ordering after WhatsApp.** Telegram (simplest bot API) is proposed second;
-  Discord and Slack follow.
+- **D5 Channel ordering after WhatsApp — Telegram shipped second** (Bot API long polling,
+  pure Python, no public URL). Discord and Slack follow on the same adapter interface.
 - **D6 Team mode timing.** It changes the trust boundary; keep it behind a flag until the
   hardening pass in M6.
 - **D7 Web search default.** Self-hosted SearXNG managed like the model server, versus a

@@ -357,7 +357,7 @@ class ChannelManager:
         try:
             while True:
                 await adapter.typing(target, True)
-                await asyncio.sleep(8)
+                await asyncio.sleep(4)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001

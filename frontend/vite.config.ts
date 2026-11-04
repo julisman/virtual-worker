@@ -9,11 +9,12 @@ export default defineConfig({
     alias: { "@": path.resolve(__dirname, "./src") },
   },
   server: {
-    port: 5173,
+    port: Number(process.env.FRONTEND_PORT || 5173),
     proxy: {
-      // Forward API + inference calls to the backend during dev.
-      "/api": "http://127.0.0.1:8888",
-      "/v1": "http://127.0.0.1:8888",
+      // Forward API + gateway calls to the dev backend (dev.sh sets BACKEND_PORT).
+      "/api": `http://127.0.0.1:${process.env.BACKEND_PORT || 8889}`,
+      "/v1": `http://127.0.0.1:${process.env.BACKEND_PORT || 8889}`,
+      "/v1beta": `http://127.0.0.1:${process.env.BACKEND_PORT || 8889}`,
     },
   },
 });

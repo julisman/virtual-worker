@@ -19,7 +19,8 @@ virtual-worker/
 │   ├── routes/         # one module per API surface (agents, hub, chat, …)
 │   ├── storage/        # SQLite-backed stores (app.db) + the settings file
 │   ├── agent/          # the agent harness — compose(), loop.run(), tools, worker, …
-│   ├── channels/       # chat-channel plugins: base contract, manager, whatsapp/ (+ Node bridge)
+│   ├── channels/       # chat-channel plugins: base contract, manager, whatsapp/ (+ Node bridge), telegram
+│   ├── vw_cli.py       # `./vw` service mode: detached supervisor, auto-restart, built UI
 │   ├── runtime/        # managed model server + engine management
 │   ├── gateway/        # protocol translators (Anthropic / Responses / Gemini)
 │   ├── middleware/     # api_debug (trace capture) + team_auth (optional auth)
@@ -33,18 +34,31 @@ virtual-worker/
 │       └── index.css   # the @theme design tokens (palette + fonts)
 ├── docs/               # PRD.md (product plan)
 ├── samples/            # example skill packs
-├── dev.sh              # bootstrap-on-first-run + start backend + frontend
+├── dev.sh              # bootstrap-on-first-run + start backend + frontend (hot reload)
+├── vw                  # service control: start | stop | restart | status | logs
 └── setup.sh            # idempotent installer (venv, npm, llama.cpp, mlx)
 ```
 
 ## Build & dev commands
 
 ```bash
-./dev.sh
+./dev.sh            # hot-reload dev profile
 #   web   → http://localhost:5173
-#   api   → http://127.0.0.1:8888   (OpenAPI docs: /docs)
-#   model → http://127.0.0.1:8080/v1 (backend-managed)
+#   api   → http://127.0.0.1:8889   (OpenAPI docs: /docs)
+#   model → http://127.0.0.1:8081/v1 (backend-managed)
+
+./vw start          # always-on service: built UI + API on one port, auto-restart
+#   app   → http://127.0.0.1:8888   (model server on :8080)
+./vw status | logs -f | restart | stop
 ```
+
+Dev and service use **different default ports** so both can run side by side
+(`./vw` → 8888/8080, `./dev.sh` → 5173/8889/8081; override with `BACKEND_PORT`,
+`LLAMA_PORT`, `FRONTEND_PORT`, `VW_PORT`). Each also gets its own data dir
+(`./data` for dev, `~/.virtual-worker` for the service). Service mode is
+`backend/vw_cli.py`: a detached supervisor (pid file `<VW_HOME>/service.json`,
+log `<VW_HOME>/logs/service.log`) that runs uvicorn without `--reload` and
+serves `frontend/dist` from the backend (`VW_SERVE_UI=1`).
 
 Prerequisites it can't install: **uv**, **Node/npm**, **Homebrew** (for llama.cpp).
 Re-run the installer any time with `./setup.sh`. Skip MLX with `VW_SKIP_MLX=1`.
@@ -52,7 +66,7 @@ Re-run the installer any time with `./setup.sh`. Skip MLX with `VW_SKIP_MLX=1`.
 ### Backend (Python, FastAPI)
 ```bash
 cd backend
-.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8888 --reload   # run
+.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8889 --reload   # run (dev port)
 .venv/bin/python -m pytest -q                                     # all tests
 .venv/bin/python -m pytest -q tests/test_scheduler.py             # one file
 ```
@@ -64,7 +78,7 @@ The venv is created by `setup.sh` with `uv`; deps are in `requirements.txt`.
 ```bash
 cd frontend
 npm install
-npm run dev         # Vite dev server (proxies /api, /v1, /v1beta → :8888)
+BACKEND_PORT=8889 npm run dev   # Vite dev server (proxies /api, /v1, /v1beta → BACKEND_PORT)
 npm run build       # tsc --noEmit && vite build — MUST pass before a PR
 npm run typecheck   # tsc --noEmit only
 ```
@@ -103,6 +117,8 @@ inbound (browser / coding agents / later: chat channels)
   two: `whatsapp/linked.py` spawns the Node sidecar in `whatsapp/bridge/` (Baileys,
   JSON lines over stdio, restarted with backoff) and `whatsapp/cloud.py` is the official
   webhook (`routes/channels.py` hosts `/api/channels/webhook/{kind}/{account}`).
+  **Telegram** (`telegram.py`) is pure httpx long polling (`getUpdates`), the model for
+  any Bot-API-style transport. `channels/builtin.py` imports every adapter so it registers.
   Accounts/bindings/dedup/pairing live in `storage/chat_channel_store.py`; secrets go to
   `settings.json` under `chatChannelSecrets` and are never returned. To add a channel:
   subclass `ChannelAdapter`, decorate with `@registry.register`, import it in

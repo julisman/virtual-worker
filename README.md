@@ -20,12 +20,14 @@ MCP server, a remote upstream, or a connected chat channel.
 
 ## What it does today
 
-- **Chat channels**: message an agent from **WhatsApp**. Pair a number by scanning a QR
-  code (linked device, no public URL needed) or use the official Cloud API webhook.
-  DM and group policies, an allow-list with pairing approval, per-chat agent routing,
-  per-conversation history, media in and out, and an audited `channel_send` tool for
-  proactive messages. The adapter interface is the plugin point for Telegram, Discord
-  and Slack.
+- **Chat channels**: message an agent from **WhatsApp** or **Telegram**. WhatsApp pairs a
+  number by scanning a QR code (linked device, no public URL needed) or uses the official
+  Cloud API webhook; Telegram takes a bot token and long-polls. DM and group policies, an
+  allow-list with pairing approval, per-chat agent routing, per-conversation history, media
+  in and out, and an audited `channel_send` tool for proactive messages. The adapter
+  interface is the plugin point for Discord and Slack.
+- **Service mode**: `./vw start` runs everything detached with automatic restarts and the
+  built UI on one port, so a worker keeps answering after you close the terminal.
 - **Agents** with a persona, model, working folder, memory, skills, MCP servers, custom
   tools, and guardrails. Chat with them in the web UI with streaming tool activity.
 - **Agent harness**: tool registry, agent loop, context budgeting, automatic guardrails
@@ -52,13 +54,20 @@ MCP server, a remote upstream, or a connected chat channel.
 ## Run
 
 ```bash
-./dev.sh
+./dev.sh                 # hot-reload dev profile
 #   web   → http://localhost:5173
-#   api   → http://127.0.0.1:8888   (OpenAPI docs: /docs)
-#   model → http://127.0.0.1:8080/v1   (backend-managed)
+#   api   → http://127.0.0.1:8889   (OpenAPI docs: /docs)
+#   model → http://127.0.0.1:8081/v1   (backend-managed)
+
+./vw start               # always-on service: built UI + API on one port, auto-restart
+#   app   → http://127.0.0.1:8888   (model server on :8080)
+./vw status | ./vw logs -f | ./vw restart | ./vw stop
 ```
 
-The launcher bootstraps on first run via `setup.sh` (backend venv with `uv`, frontend
+Dev and service use different default ports and data directories (`./data` for dev,
+`~/.virtual-worker` for the service), so both can run side by side.
+
+Either launcher bootstraps on first run via `setup.sh` (backend venv with `uv`, frontend
 deps, llama.cpp via Homebrew, and the MLX engines on Apple Silicon). Prerequisites it
 cannot install for you: **uv**, **Node.js**, and **Homebrew** (for llama.cpp). Then open
 **Models**, download a model, and **Activate** it.
@@ -77,6 +86,7 @@ All local state lives under `VW_HOME` (default `~/.virtual-worker`; `dev.sh` set
 | Env var | Default | Purpose |
 |---|---|---|
 | `VW_HOME` | `~/.virtual-worker` | data dir (db, settings, logs, pid) |
+| `VW_PORT` | `8888` | service port for `./vw start` (dev uses `BACKEND_PORT`, default `8889`) |
 | `VW_UPSTREAM_URL` | `http://127.0.0.1:8080` | OpenAI-compatible model server; setting it disables managed mode |
 | `VW_MANAGED_LLAMA` | `1` | backend starts, stops and switches the model server |
 | `VW_MODEL_MAP` / `VW_DEFAULT_MODEL` | – | map vendor model ids to your local model |
@@ -89,8 +99,15 @@ All local state lives under `VW_HOME` (default `~/.virtual-worker`; `dev.sh` set
 | `TAVILY_API_KEY` / `BRAVE_API_KEY` | – | optional web search providers |
 | `VW_NODE_BIN` | `node` on PATH | Node binary for the WhatsApp bridge sidecar |
 | `VW_WHATSAPP_MAX_MEDIA_BYTES` | `26214400` | cap on a received WhatsApp attachment |
+| `VW_TELEGRAM_MAX_MEDIA_BYTES` | `20971520` | cap on a received Telegram attachment |
 
-## Connect WhatsApp
+## Connect a chat app
+
+**Telegram** (quickest): message `@BotFather`, send `/newbot`, copy the token. Open
+**Channels → Connect a channel → Telegram**, paste the token, pick the default agent. Done.
+No public URL is needed; the bot long-polls.
+
+**WhatsApp (linked device):**
 
 1. Open **Channels → Connect a channel**, choose **WhatsApp (linked device)**, pick the
    default agent, and connect.
@@ -117,9 +134,9 @@ cd frontend && npm run build
 
 The product plan lives in [`docs/PRD.md`](docs/PRD.md). Next milestones:
 
-1. Telegram, Discord and Slack channels on the same adapter interface; delegation with
-   flow-back into the originating chat.
-2. Service mode, desktop packaging, and a security hardening pass.
+1. Discord and Slack channels on the same adapter interface; delegation with flow-back
+   into the originating chat.
+2. Security hardening pass and desktop packaging.
 3. Knowledge wikis, template registries, analytics budgets.
 
 ## Contributing
