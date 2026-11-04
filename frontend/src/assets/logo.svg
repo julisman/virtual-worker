@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" width="720" height="160">
+  <rect width="720" height="160" rx="24" fill="#f4f1e8"/>
+  <g transform="translate(40 32)">
+    <rect width="96" height="96" rx="24" fill="#2b3c82"/>
+    <rect x="21" y="30" width="54" height="42" rx="12" fill="#f4f1e8"/>
+    <rect x="43.5" y="18" width="9" height="12" rx="4.5" fill="#f4f1e8"/>
+    <circle cx="48" cy="15" r="5" fill="#45ad82"/>
+    <circle cx="36" cy="49.5" r="5" fill="#2b3c82"/>
+    <circle cx="60" cy="49.5" r="5" fill="#2b3c82"/>
+    <rect x="36" y="60" width="24" height="4.5" rx="2" fill="#2b3c82"/>
+  </g>
+  <text x="168" y="86" font-family="Fredoka, Nunito, system-ui, sans-serif" font-size="56" font-weight="600" fill="#28335c">Virtual Worker</text>
+  <text x="170" y="122" font-family="Nunito, system-ui, sans-serif" font-size="22" font-weight="600" fill="#5a6bb5">Local-first AI workers · reachable from the chat apps you already use</text>
+</svg>

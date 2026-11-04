@@ -1,0 +1,179 @@
+# AGENTS.md — Virtual Worker
+
+Instructions for AI coding agents (and humans) working in this repository.
+
+> **Virtual Worker** is an open-source, **local-first** platform for running autonomous
+> AI workers: agents with a persona, tools, skills, memory, a task board, schedules and
+> guardrails, served by a local model by default. A React app talks to a FastAPI backend
+> that is also an OpenAI-compatible gateway in front of any model server (llama.cpp,
+> MLX, Ollama, vLLM, or a remote provider). Nothing leaves the machine unless the user
+> explicitly connects something. The product plan is `docs/PRD.md`.
+
+## Repository structure
+
+```
+virtual-worker/
+├── backend/            # FastAPI app (Python) — the gateway + all /api routes
+│   ├── app.py          # entry point: registers routers, starts background loops
+│   ├── config.py       # env + paths (VW_HOME, upstream, model map, …)
+│   ├── routes/         # one module per API surface (agents, hub, chat, …)
+│   ├── storage/        # SQLite-backed stores (app.db) + the settings file
+│   ├── agent/          # the agent harness — compose(), loop.run(), tools, worker, …
+│   ├── channels/       # chat-channel plugins: base contract, manager, whatsapp/ (+ Node bridge)
+│   ├── runtime/        # managed model server + engine management
+│   ├── gateway/        # protocol translators (Anthropic / Responses / Gemini)
+│   ├── middleware/     # api_debug (trace capture) + team_auth (optional auth)
+│   └── tests/          # pytest suite (test_*.py)
+├── frontend/           # React + Vite + TypeScript + Tailwind v4
+│   └── src/
+│       ├── App.tsx     # app shell: sidebar nav + routed content pane
+│       ├── features/<name>/<name>-page.tsx   # one folder per screen
+│       ├── lib/        # api.ts (apiJson/apiPost/apiFetch), auth.tsx
+│       ├── assets/     # icon.svg, logo.svg
+│       └── index.css   # the @theme design tokens (palette + fonts)
+├── docs/               # PRD.md (product plan)
+├── samples/            # example skill packs
+├── dev.sh              # bootstrap-on-first-run + start backend + frontend
+└── setup.sh            # idempotent installer (venv, npm, llama.cpp, mlx)
+```
+
+## Build & dev commands
+
+```bash
+./dev.sh
+#   web   → http://localhost:5173
+#   api   → http://127.0.0.1:8888   (OpenAPI docs: /docs)
+#   model → http://127.0.0.1:8080/v1 (backend-managed)
+```
+
+Prerequisites it can't install: **uv**, **Node/npm**, **Homebrew** (for llama.cpp).
+Re-run the installer any time with `./setup.sh`. Skip MLX with `VW_SKIP_MLX=1`.
+
+### Backend (Python, FastAPI)
+```bash
+cd backend
+.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8888 --reload   # run
+.venv/bin/python -m pytest -q                                     # all tests
+.venv/bin/python -m pytest -q tests/test_scheduler.py             # one file
+```
+The venv is created by `setup.sh` with `uv`; deps are in `requirements.txt`.
+**No new dependency without a clear reason.** The core leans on stdlib + `httpx` +
+`fastapi` and stays dependency-light; integrations belong behind plugin interfaces.
+
+### Frontend (React + Vite + TS)
+```bash
+cd frontend
+npm install
+npm run dev         # Vite dev server (proxies /api, /v1, /v1beta → :8888)
+npm run build       # tsc --noEmit && vite build — MUST pass before a PR
+npm run typecheck   # tsc --noEmit only
+```
+
+## Architecture (backend)
+
+```
+inbound (browser / coding agents / later: chat channels)
+  → ApiDebugMiddleware (tees a bounded copy of every model call → app.db)
+  → TeamAuthMiddleware (no-op in solo mode; gates /api when team mode is on)
+  → gateway translators (/v1/messages · /v1/responses · /v1beta/… → OpenAI shape)
+  → routes/* (the /api surface)
+  → agent.compose(agent) → registry {name:{schema, fn}} → agent.loop.run(...)
+  → runtime.llama_manager (managed model server) ─httpx─▶ upstream (:8080)
+```
+
+- **Agent tools** are assembled per run in `agent/compose.py` as a registry
+  `{name: {"schema": <openai fn schema>, "fn": <async callable>}}`, then passed to
+  `agent/loop.py:run()`. Per-agent tool factories follow one pattern (see
+  `make_memory_tools`, `make_schedule_tools`, `make_kb_tools`, `make_custom_tools`,
+  `make_team_tools`, `make_deliver_tool`). To add a tool, write a factory and wire it
+  in `compose()`.
+- **Always-on background loops**, started in `app.py`'s startup hook: the
+  **scheduler** (`agent/scheduler.py`), the **trigger engine** (`agent/triggers.py`),
+  and the board **worker** (`agent/worker.py`, opt-in autonomous task execution with a
+  verify pass). Loops are best-effort: log errors, never crash.
+- **Stores** (`storage/*_store.py`) all open `app.db` the same way: a `_conn()` with
+  `PRAGMA journal_mode=WAL` + `row_factory=sqlite3.Row`, ISO timestamps, a
+  `threading.Lock`, and `camelCase` dicts out. Mirror an existing store when adding
+  one, and register any new route in `app.py`.
+- **Chat channels** (`backend/channels/`, PRD §8.6): `base.py` is the plugin contract
+  (`ChannelAdapter` + `InboundMessage` + `registry`); `manager.py` is the shared spine
+  (dedup → policy → resolve agent → per-conversation FIFO/debounce → slash commands →
+  history from the chat session → `execute_turn` with timeout/typing → strip reasoning →
+  persist → chunk + send → delivery audit). Adapters only move messages. WhatsApp ships
+  two: `whatsapp/linked.py` spawns the Node sidecar in `whatsapp/bridge/` (Baileys,
+  JSON lines over stdio, restarted with backoff) and `whatsapp/cloud.py` is the official
+  webhook (`routes/channels.py` hosts `/api/channels/webhook/{kind}/{account}`).
+  Accounts/bindings/dedup/pairing live in `storage/chat_channel_store.py`; secrets go to
+  `settings.json` under `chatChannelSecrets` and are never returned. To add a channel:
+  subclass `ChannelAdapter`, decorate with `@registry.register`, import it in
+  `channels/whatsapp/__init__.py`-style from `app.py`'s startup, add tests with a fake
+  adapter (see `tests/test_channel_manager.py`).
+
+## Configuration & data (local-first)
+
+All state lives under **`VW_HOME`** (default `~/.virtual-worker`; `dev.sh` sets it to
+`./data`). The SQLite db is `app.db`; app settings are `settings.json`.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `VW_HOME` | `~/.virtual-worker` | data dir (db, settings, logs, pid) |
+| `VW_UPSTREAM_URL` | `http://127.0.0.1:8080` | OpenAI-compatible model server; setting it disables managed mode |
+| `VW_MANAGED_LLAMA` | `1` | backend starts/stops/switches the model server |
+| `VW_MODEL_MAP` / `VW_DEFAULT_MODEL` | – | map vendor model ids → your local model |
+| `VW_GATEWAY_KEY` | – | require a static key on the gateway |
+| `VW_DEBUG_CAPTURE` | `1` | capture model calls into the trace store |
+| `VW_SKIP_MLX` | `0` | skip the MLX engines on Apple Silicon |
+| `LLAMA_*` / `MLX_*` | – | engine binaries, port, ctx, GPU layers |
+| `HF_TOKEN` | – | gated/private Hugging Face repos |
+| `VW_NODE_BIN` | `node` | Node binary for the WhatsApp bridge sidecar |
+| `VW_WHATSAPP_MAX_MEDIA_BYTES` | 25 MB | cap on a received WhatsApp attachment |
+
+API gateway tokens are `sk-vw-<hex>` (only a SHA-256 hash is stored). The gateway is
+open until the first token is minted, then a valid token is required.
+
+## Conventions
+
+- **Python**: standard library style; type hints; small focused modules. Errors are
+  best-effort in background loops (log, never crash the loop).
+- **TypeScript/React**: functional components + hooks; `const` over `let`; camelCase
+  vars, PascalCase types. Data fetching goes through `@/lib/api`. One screen = one
+  `features/<name>/` folder.
+- **Styling**: Tailwind v4 with the `@theme` tokens in `src/index.css`. Use the tokens
+  (`bg-primary`, `text-ink`, `bg-base`, `border-pressed`, …), don't hard-code hex.
+- **Local-first is a hard constraint.** Any network egress (web fetch, remote MCP,
+  webhook delivery, remote upstream, chat channel) must be explicit and opt-in.
+- **Secrets** are write-only: stored once, never echoed to the UI, redacted from logs
+  and traces.
+- **No company-specific code.** Integrations ship as generic, configurable plugins.
+- **Commits**: conventional — `feat:`, `fix:`, `chore:`, `docs:`, with an optional
+  scope such as `feat(channels):`.
+
+## Workflow — branch + PR
+
+- **Never push directly to `main`.** Create a feature branch, commit, push, open a PR,
+  merge after review.
+  ```bash
+  git checkout -b feat/<scope>-<desc>
+  # … work …
+  git push -u origin feat/<scope>-<desc>
+  gh pr create --base main --title "feat: …" --body "…"
+  ```
+- For parallel work, use a **git worktree**
+  (`git worktree add ../vw-wt-<slug> -b <branch> main`).
+
+## Testing — gate every change
+
+A change isn't done until both pass:
+```bash
+cd backend  && .venv/bin/python -m pytest -q       # backend
+cd frontend && npm run build                       # tsc --noEmit && vite build
+```
+- Add backend tests under `backend/tests/test_*.py`. **Isolate stores** by
+  `monkeypatch.setattr(config, "APP_HOME", tmp_path)` (see `tests/test_scheduler.py`).
+- Make tests hermetic: monkeypatch model activation / chat completion / embeddings so
+  no real model is loaded.
+
+## Where to read more
+
+- `docs/PRD.md` — the product plan: concepts, requirements, milestones, open decisions.
+- In-app **Docs** (the Docs tab) — end-user documentation for every screen.

@@ -1,0 +1,27 @@
+// Minimal fetch client. In dev, Vite proxies /api and /v1 to the backend
+// (see vite.config.ts). Add auth headers here when auth is introduced.
+
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(path, init);
+}
+
+/** Fetch JSON and throw a useful error on non-2xx (reads {detail}/{error}). */
+export async function apiJson<T = unknown>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(path, init);
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok) {
+    const msg = data?.detail ?? data?.error?.message ?? data?.error ?? `HTTP ${res.status}`;
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  return data as T;
+}
+
+/** POST a JSON body and parse the JSON response. */
+export function apiPost<T = unknown>(path: string, body: unknown): Promise<T> {
+  return apiJson<T>(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}

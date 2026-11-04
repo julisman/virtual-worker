@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.db
+*.db-wal
+*.db-shm
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# Local app data (app.db, sessions, tokens, llama logs) — created at runtime
+data/
+
+# OS
+.DS_Store

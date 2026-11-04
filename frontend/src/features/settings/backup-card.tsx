@@ -1,0 +1,209 @@
+// Backup & Restore (PRD-11 M1) — export/import a portable .vwbak studio snapshot.
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { apiFetch, apiJson } from "@/lib/api";
+
+interface Rollback {
+  name: string;
+  size: number;
+  modifiedAt: string;
+}
+
+interface BackupInfo {
+  lastExportAt: string | null;
+  rollbacks: Rollback[];
+  homePath: string;
+}
+
+interface ImportResult {
+  ok: boolean;
+  restored: Record<string, boolean>;
+  preImportBackup: string | null;
+  manifest: { secretsNeeded?: { type: string; key: string; server?: string }[] };
+}
+
+function Spinner() {
+  return <span className="inline-block size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />;
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function fmtDate(iso: string | null): string {
+  if (!iso) return "never";
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+}
+
+export function BackupCard() {
+  const [info, setInfo] = useState<BackupInfo | null>(null);
+  const [includeModels, setIncludeModels] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(async () => {
+    try { setInfo(await apiJson<BackupInfo>("/api/backup/info")); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const exportNow = useCallback(async () => {
+    setExporting(true); setError(null);
+    try {
+      const res = await apiFetch(`/api/backup/export?includeModels=${includeModels}`);
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error(j?.detail || `export failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename="?([^"]+)"?/);
+      const name = m?.[1] || `studio-${new Date().toISOString().slice(0, 10)}.vwbak`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      a.remove(); URL.revokeObjectURL(url);
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setExporting(false); }
+  }, [includeModels, load]);
+
+  const importNow = useCallback(async (file: File) => {
+    const ok = window.confirm(
+      `Importing "${file.name}" will REPLACE this studio's database, settings and skills.\n\n` +
+      "Your current state is automatically saved as a rollback backup first, but this is " +
+      "destructive. Continue?",
+    );
+    if (!ok) return;
+    setImporting(true); setError(null); setResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await apiFetch("/api/backup/import", { method: "POST", body: form });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(j?.detail || `import failed (${res.status})`);
+      setResult(j as ImportResult);
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setImporting(false); if (fileRef.current) fileRef.current.value = ""; }
+  }, [load]);
+
+  const secretsNeeded = result?.manifest?.secretsNeeded ?? [];
+
+  return (
+    <div className="mt-8">
+      <div className="mb-4">
+        <h2 className="font-display text-base font-semibold text-ink">Backup &amp; Restore</h2>
+        <p className="mt-0.5 text-sm text-body">
+          Export a portable snapshot of this studio — agents, memory, sessions, settings and skills —
+          to a single <span className="font-mono text-xs">.vwbak</span> file you can keep on a drive
+          or move to another Mac. Everything stays local; nothing is sent to a cloud.
+        </p>
+      </div>
+
+      {error && (
+        <p className="mb-3 rounded-xl border border-danger-soft bg-danger-soft px-3 py-2 font-mono text-[11px] text-danger">{error}</p>
+      )}
+
+      {/* Export */}
+      <div className="rounded-2xl border border-line bg-canvas p-4">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0">
+            <div className="font-display text-sm font-semibold text-ink">Export snapshot</div>
+            <p className="mt-0.5 text-xs text-mute">
+              Secrets are redacted by default (API-token hashes dropped, MCP env keys masked).
+              The HuggingFace model cache is never included.
+            </p>
+          </div>
+          <button onClick={exportNow} disabled={exporting}
+            className="ml-auto flex shrink-0 items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white shadow-[0_8px_18px_-8px_rgba(43,60,130,0.7)] transition-colors hover:bg-primary-deep disabled:opacity-40">
+            {exporting ? <><Spinner /> Exporting…</> : "Export .vwbak"}
+          </button>
+        </div>
+        <label className="mt-3 flex items-center gap-2 text-xs text-body">
+          <input type="checkbox" checked={includeModels} onChange={(e) => setIncludeModels(e.target.checked)}
+            className="size-4 rounded border-pressed accent-primary" />
+          Include fine-tuned models (<span className="font-mono">models/</span>) — can be large
+        </label>
+        <p className="mt-3 text-[11px] text-mute">
+          Last export: <span className="font-medium text-body">{fmtDate(info?.lastExportAt ?? null)}</span>
+          {info?.homePath && <> · home <span className="font-mono">{info.homePath}</span></>}
+        </p>
+      </div>
+
+      {/* Import */}
+      <div className="mt-3 rounded-2xl border border-line bg-canvas p-4">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0">
+            <div className="font-display text-sm font-semibold text-ink">Restore from a snapshot</div>
+            <p className="mt-0.5 text-xs text-mute">
+              Replaces the current database, settings and skills. Your present state is saved as a
+              rollback backup first.
+            </p>
+          </div>
+          <button onClick={() => fileRef.current?.click()} disabled={importing}
+            className="ml-auto flex shrink-0 items-center gap-2 rounded-xl border border-pressed bg-canvas px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-soft disabled:opacity-40">
+            {importing ? <><Spinner /> Importing…</> : "Import .vwbak"}
+          </button>
+          <input ref={fileRef} type="file" accept=".vwbak" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) importNow(f); }} />
+        </div>
+        <p className="mt-3 rounded-xl border border-warn-soft bg-warn-soft px-3 py-2 text-[11px] font-medium text-warn">
+          Warning: importing is destructive and replaces your current studio. A timestamped rollback
+          backup is written before anything is overwritten.
+        </p>
+
+        {result?.ok && (
+          <div className="mt-3 border-t border-line pt-3">
+            <p className="text-xs font-medium text-success">✓ Restore complete — reload the app to see imported data.</p>
+            {result.preImportBackup && (
+              <p className="mt-1 text-[11px] text-mute">Rollback saved: <span className="font-mono">{result.preImportBackup}</span></p>
+            )}
+            {secretsNeeded.length > 0 && (
+              <div className="mt-2 rounded-xl bg-softer p-3">
+                <p className="text-[11px] font-medium text-body">Re-enter these secrets (redacted in the archive):</p>
+                <ul className="mt-1 space-y-0.5">
+                  {secretsNeeded.map((s, i) => (
+                    <li key={i} className="font-mono text-[10px] text-mute">
+                      {s.type === "mcp" ? `MCP ${s.server} · ${s.key}` : `${s.type} · ${s.key}`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Rollback backups */}
+      {info && info.rollbacks.length > 0 && (
+        <div className="mt-3 rounded-2xl border border-line bg-canvas p-4">
+          <div className="font-display text-sm font-semibold text-ink">Rollback backups</div>
+          <p className="mt-0.5 text-xs text-mute">Snapshots written automatically before each import (under <span className="font-mono">backups/</span>).</p>
+          <ul className="mt-2 space-y-1">
+            {info.rollbacks.map((r) => (
+              <li key={r.name} className="flex items-center gap-2 text-[11px]">
+                <span className="font-mono text-body">{r.name}</span>
+                <span className="text-mute">{fmtBytes(r.size)}</span>
+                <span className="ml-auto text-mute">{fmtDate(r.modifiedAt)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <p className="mt-4 text-xs text-mute">
+        Deferred (later milestones): selective export of just chosen agents/skills, scheduled backups
+        with retention, and <span className="font-mono">VW_HOME</span> migration.
+      </p>
+    </div>
+  );
+}
+
+export default BackupCard;

@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Virtual Worker — brand design tokens.
+   Navy primary (#2B3C82) on a warm cream ground (#F4F1E8); friendly purple ant
+   mascot. Display/brand type is Fredoka; UI/body is Nunito. Rounded geometry —
+   16–18px cards, pill controls (rounded-full). Secondary blue/green/amber are
+   small accents only (agent avatars, status dots, client cards).
+   Token NAMES are kept stable from the old theme so existing classes re-skin
+   automatically; values are the Virtual Worker palette. New brand tokens are added below.
+   ─────────────────────────────────────────────────────────────────────────── */
+@theme {
+  /* neutrals & ground */
+  --color-ink: #28335c;        /* headings / strong text                        */
+  --color-canvas: #ffffff;     /* card / panel / input surface                  */
+  --color-base: #f4f1e8;       /* page ground behind cards (warm cream)         */
+  --color-body: #4c567a;       /* body copy, message text                       */
+  --color-mute: #98a0b8;       /* meta, captions, placeholders, fine print      */
+  --color-hairline: #c3cce8;   /* soft fills — gauge tracks, dots (periwinkle)  */
+  --color-soft: #f0eee6;       /* chips, segmented track, icon tiles            */
+  --color-softer: #fbfaf4;     /* sidebar/header surface, nested/read-only field*/
+  --color-pressed: #e8e4d8;    /* borders, dividers, section rules (warm)       */
+  --color-line: #eceae0;       /* card outline                                  */
+  --color-elevated: #21306b;   /* hover on dark/primary surfaces                */
+
+  /* brand — primary navy */
+  --color-primary: #2b3c82;          /* active nav, primary buttons, user bubbles, links */
+  --color-primary-deep: #21306b;     /* hover on primary, strong primary text   */
+  --color-primary-soft: #e7eaf5;     /* selected/active soft backgrounds, accent chips */
+  --color-primary-line: #c9d1ea;     /* borders on soft-accent elements         */
+  --color-primary-badge: #5a6bb5;    /* the v0.1 badge text                      */
+
+  /* brand — secondary accents (small touches) */
+  --color-info: #3d8bd4;             /* blue — researcher, antigravity          */
+  --color-success: #45ad82;          /* green — coder, codex, active/success     */
+  --color-success-soft: #e1f3ea;
+  --color-warn: #e0892f;             /* amber — scribe, claude code, "tight"     */
+  --color-warn-soft: #fbf0d9;
+  --color-magenta: #c77dd0;          /* rare decorative dot                      */
+  --color-danger: #c0556b;           /* error, "too large"                       */
+  --color-danger-soft: #f8e4e8;
+
+  /* dark code/panel surface */
+  --color-panel: #1e2444;            /* code blocks, base-URL banner, JSON viewer*/
+  --color-panel-ink: #e7e9f5;        /* text on the dark panel                   */
+
+  /* type */
+  --font-sans: "Nunito", system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Fredoka", "Nunito", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--color-base);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Fredoka for the brand wordmark, screen titles, big stat numbers, greetings. */
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.3px;
+}
+
+::selection {
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+/* Logo gentle float — empty-chat hero. */
+@keyframes vw-float {
+  0%, 100% { transform: translateY(-7px); }
+  50% { transform: translateY(7px); }
+}
+.animate-float {
+  animation: vw-float 5s ease-in-out infinite;
+}
