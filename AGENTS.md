@@ -103,8 +103,15 @@ inbound (browser / coding agents / later: chat channels)
   in `compose()`.
 - **Always-on background loops**, started in `app.py`'s startup hook: the
   **scheduler** (`agent/scheduler.py`), the **trigger engine** (`agent/triggers.py`),
-  and the board **worker** (`agent/worker.py`, opt-in autonomous task execution with a
-  verify pass). Loops are best-effort: log errors, never crash.
+  the board **worker** (`agent/worker.py`, opt-in autonomous task execution with a
+  verify pass), the **channel manager**, and the **maintenance** loop
+  (`runtime/maintenance.py`: retention pruning + WAL checkpoint, hourly). Loops are
+  best-effort: log errors, never crash.
+- **Security baseline** (`app.py`): CORS local-origins-only (+ `VW_CORS_ORIGINS`),
+  `TrustedHostMiddleware` (+ `VW_ALLOWED_HOSTS`), httpx logging quieted and a
+  `_RedactFilter` scrubbing tokens from log lines; webhook paths bypass the team-mode
+  cookie gate because they carry their own proof (HMAC / unguessable token). Keep every
+  new inbound endpoint under that rule. See `SECURITY.md`.
 - **Stores** (`storage/*_store.py`) all open `app.db` the same way: a `_conn()` with
   `PRAGMA journal_mode=WAL` + `row_factory=sqlite3.Row`, ISO timestamps, a
   `threading.Lock`, and `camelCase` dicts out. Mirror an existing store when adding
@@ -141,6 +148,8 @@ All state lives under **`VW_HOME`** (default `~/.virtual-worker`; `dev.sh` sets 
 | `VW_SKIP_MLX` | `0` | skip the MLX engines on Apple Silicon |
 | `LLAMA_*` / `MLX_*` | – | engine binaries, port, ctx, GPU layers |
 | `HF_TOKEN` | – | gated/private Hugging Face repos |
+| `VW_ALLOWED_HOSTS` / `VW_CORS_ORIGINS` | – | extra Host names / browser origins (local ones are always allowed) |
+| `VW_*_RETENTION_DAYS`, `VW_TRACE_MAX_RUNS` | 30/90/90/7/14 | maintenance-loop retention (traces, activity, deliveries, chat dedup, media) |
 | `VW_NODE_BIN` | `node` | Node binary for the WhatsApp bridge sidecar |
 | `VW_WHATSAPP_MAX_MEDIA_BYTES` | 25 MB | cap on a received WhatsApp attachment |
 

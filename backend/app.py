@@ -7,6 +7,9 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
+import config
 
 from middleware.api_debug import ApiDebugMiddleware
 from middleware.team_auth import TeamAuthMiddleware
@@ -45,20 +48,55 @@ from routes.users import router as users_router
 from runtime import llama_manager
 
 logging.basicConfig(level=logging.INFO)
+# Log hygiene: httpx logs full request URLs at INFO, which would print bot
+# tokens (Telegram puts the token in the path). Quiet it, and scrub any
+# credential-shaped substrings that still reach a log line.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+class _RedactFilter(logging.Filter):
+    import re as _re
+    _PATTERNS = [
+        (_re.compile(r"/bot\d{6,}:[A-Za-z0-9_-]{20,}"), "/bot<redacted>"),
+        (_re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{12,}"), r"\1<redacted>"),
+        (_re.compile(r"sk-[A-Za-z0-9_-]{12,}"), "sk-<redacted>"),
+    ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+            scrubbed = msg
+            for pat, repl in self._PATTERNS:
+                scrubbed = pat.sub(repl, scrubbed)
+            if scrubbed != msg:
+                record.msg, record.args = scrubbed, ()
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
+
+for _h in logging.getLogger().handlers:
+    _h.addFilter(_RedactFilter())
 
 app = FastAPI(title="Virtual Worker", version="0.1.0")
 
 # Team-mode auth gate. Added FIRST so it ends up INNERMOST — CORS then wraps its
 # 401s with the right headers. In solo mode (default) it's a transparent no-op.
 app.add_middleware(TeamAuthMiddleware)
-# CORS first (added before -> inner), debug capture last (added after -> OUTERMOST
+# CORS (added before -> inner), debug capture last (added after -> OUTERMOST
 # so it tees the exact bytes the client receives, without blocking streaming).
+# Origins: local only by default (+ VW_CORS_ORIGINS) — never "*", so a web page
+# the user happens to visit cannot drive the API through their browser.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.CORS_ORIGINS,
+    allow_origin_regex=config.CORS_ORIGIN_REGEX,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Host-header allow-list (DNS-rebinding guard): local names + VW_ALLOWED_HOSTS.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.ALLOWED_HOSTS)
 app.add_middleware(ApiDebugMiddleware)
 
 # OpenAI-compatible inference gateway (proxied to VW_UPSTREAM_URL).
@@ -153,6 +191,12 @@ async def _startup():
         triggers.start()
     except Exception:
         logging.getLogger(__name__).warning("trigger engine start failed", exc_info=True)
+    # Maintenance — keeps traces/activity/deliveries/media bounded (retention knobs in config).
+    try:
+        from runtime.maintenance import maintenance
+        maintenance.start()
+    except Exception:
+        logging.getLogger(__name__).warning("maintenance start failed", exc_info=True)
     # Chat channels — start every enabled account's adapter (dials out; no inbound port).
     try:
         import channels.builtin  # noqa: F401  (registers adapters)
@@ -184,6 +228,11 @@ async def _shutdown():
         await channel_manager.stop()
     except Exception:
         logging.getLogger(__name__).debug("channel manager stop failed", exc_info=True)
+    try:
+        from runtime.maintenance import maintenance
+        await maintenance.stop()
+    except Exception:
+        logging.getLogger(__name__).debug("maintenance stop failed", exc_info=True)
 
 
 @app.get("/health")

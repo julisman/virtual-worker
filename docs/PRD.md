@@ -74,7 +74,8 @@ The product is built around five ideas:
   OpenAI-compatible server; per-worker BYOK providers (OpenAI, Anthropic, Google,
   DeepSeek, OpenRouter, custom gateways).
 - G9. **Open-source hygiene**: permissive license, no telemetry, documented plugin
-  interfaces, a contribution guide, CI with tests on every PR.
+  interfaces, a contribution guide, CI with tests on every PR. _CI, templates and
+  SECURITY.md added 2026-11-04._
 
 **Non-goals (v1)**
 
@@ -327,6 +328,7 @@ The product is built around five ideas:
 - FR-O3. Analytics: per-worker tokens, cost, latency, tool-call counts, error rates over
   time; optional budgets with alerts.
 - FR-O4. Retention: bounded trace and activity tables with a maintenance loop.
+  _Implemented 2026-11-04 (`runtime/maintenance.py`, env-tunable retention)._
 
 ### 8.12 Trust, backup, packaging
 
@@ -334,6 +336,8 @@ The product is built around five ideas:
   and audit on a shared host; it is the one trust-boundary change and ships behind a flag.
 - FR-X2. Security baseline: strict CORS, auth gates on every mutating API in team mode,
   SSRF guard on fetch, path traversal checks, secrets redacted everywhere.
+  _Implemented 2026-11-04: local-only CORS, Host allow-list, log redaction, webhook
+  exemptions from the cookie gate, `SECURITY.md`. Team-mode hardening pass still open._
 - FR-X3. Backup and restore: one archive of the data directory (workers, memory, skills,
   templates, settings, channel sessions), scheduled local backups, machine migration.
 - FR-X4. Packaging: a dev launcher, a service mode (detached, auto-restart, built UI), and

@@ -239,3 +239,9 @@ def list_deliveries(*, agent_id: str | None = None, schedule_id: str | None = No
     with _conn() as conn:
         rows = conn.execute(q, args).fetchall()
     return [_del_row(r) for r in rows]
+
+
+def prune_deliveries(older_than_iso: str) -> int:
+    """Delete delivery audit rows older than ``older_than_iso``."""
+    with _lock, _conn() as conn:
+        return conn.execute("DELETE FROM deliveries WHERE ts < ?", (older_than_iso,)).rowcount

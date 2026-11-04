@@ -51,6 +51,33 @@ DEFAULT_MODEL = os.environ.get("VW_DEFAULT_MODEL")
 GATEWAY_KEY = os.environ.get("VW_GATEWAY_KEY")
 
 
+# --- Security ---------------------------------------------------------------- #
+# Browser origins allowed to call the API (CORS). Default: only local origins
+# (any port) so a random web page can't drive the API through the user's browser.
+# Add more with VW_CORS_ORIGINS="https://app.example.com,https://other" (exact).
+CORS_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
+CORS_ORIGINS: list[str] = [o.strip() for o in (os.environ.get("VW_CORS_ORIGINS") or "").split(",") if o.strip()]
+# Host-header allow-list (DNS-rebinding guard). Local names are always allowed;
+# add your public host for webhooks / a reverse proxy: VW_ALLOWED_HOSTS="bot.example.com".
+ALLOWED_HOSTS: list[str] = ["localhost", "127.0.0.1", "[::1]", "testserver"] + [
+    h.strip() for h in (os.environ.get("VW_ALLOWED_HOSTS") or "").split(",") if h.strip()]
+
+# --- Retention (the maintenance loop keeps app.db and media bounded) --------- #
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name) or default)
+    except ValueError:
+        return default
+
+TRACE_RETENTION_DAYS = _int_env("VW_TRACE_RETENTION_DAYS", 30)        # Debug traces (model calls)
+TRACE_MAX_RUNS = _int_env("VW_TRACE_MAX_RUNS", 20000)                 # hard cap on trace rows
+ACTIVITY_RETENTION_DAYS = _int_env("VW_ACTIVITY_RETENTION_DAYS", 90)  # agent activity feed
+DELIVERY_RETENTION_DAYS = _int_env("VW_DELIVERY_RETENTION_DAYS", 90)  # outbound audit rows
+CHAT_EVENT_RETENTION_DAYS = _int_env("VW_CHAT_EVENT_RETENTION_DAYS", 7)   # channel dedup ids
+CHANNEL_MEDIA_RETENTION_DAYS = _int_env("VW_CHANNEL_MEDIA_RETENTION_DAYS", 14)  # received files
+MAINTENANCE_INTERVAL_S = _int_env("VW_MAINTENANCE_INTERVAL_S", 3600)
+
+
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path

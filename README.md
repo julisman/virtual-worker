@@ -97,6 +97,11 @@ All local state lives under `VW_HOME` (default `~/.virtual-worker`; `dev.sh` set
 | `LLAMA_*` / `MLX_*` | – | engine binaries, port, context, GPU layers |
 | `HF_TOKEN` | – | gated or private Hugging Face repos |
 | `TAVILY_API_KEY` / `BRAVE_API_KEY` | – | optional web search providers |
+| `VW_ALLOWED_HOSTS` | – | extra Host names accepted besides localhost (LAN IP, public webhook host) |
+| `VW_CORS_ORIGINS` | – | extra browser origins allowed to call the API (local origins always are) |
+| `VW_TRACE_RETENTION_DAYS` / `VW_TRACE_MAX_RUNS` | `30` / `20000` | trace retention |
+| `VW_ACTIVITY_RETENTION_DAYS` / `VW_DELIVERY_RETENTION_DAYS` | `90` / `90` | activity and delivery audit retention |
+| `VW_CHANNEL_MEDIA_RETENTION_DAYS` | `14` | received chat attachments are deleted after this |
 | `VW_NODE_BIN` | `node` on PATH | Node binary for the WhatsApp bridge sidecar |
 | `VW_WHATSAPP_MAX_MEDIA_BYTES` | `26214400` | cap on a received WhatsApp attachment |
 | `VW_TELEGRAM_MAX_MEDIA_BYTES` | `20971520` | cap on a received Telegram attachment |
@@ -122,6 +127,14 @@ The linked-device transport is a small Node sidecar built on the open-source
 like the model server. It is an unofficial client: use a dedicated number and accept
 WhatsApp's terms. Businesses with a public URL can use the official **Cloud API**
 transport instead.
+
+## Security
+
+The backend binds to localhost, allows only local browser origins, checks the Host
+header, keeps secrets write-only, scrubs credential-shaped strings from logs, and
+audits every outbound message. A maintenance loop keeps traces, activity, audit rows and
+received media bounded. See [`SECURITY.md`](SECURITY.md) for the full model and how to
+report a vulnerability.
 
 ## Tests
 

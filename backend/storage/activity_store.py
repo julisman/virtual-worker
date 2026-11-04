@@ -125,3 +125,9 @@ def since(agent_id: str, iso_ts: str, limit: int = 500) -> list[dict]:
             "ORDER BY created_at ASC LIMIT ?",
             (agent_id, iso_ts, max(1, int(limit)))).fetchall()
     return [_row(r) for r in rows]
+
+
+def prune(older_than_iso: str) -> int:
+    """Delete activity rows created before ``older_than_iso``."""
+    with _lock, _conn() as conn:
+        return conn.execute("DELETE FROM activities WHERE created_at < ?", (older_than_iso,)).rowcount

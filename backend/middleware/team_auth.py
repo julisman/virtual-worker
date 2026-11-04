@@ -24,6 +24,9 @@ from storage import user_store
 # Reachable without a session even in Team mode: the login call and the guarded
 # first-Owner bootstrap (which enforces its own count==0 / inviter rules).
 _ALLOW = ("/api/auth/login", "/api/auth/register")
+# Inbound webhooks carry their own proof (HMAC signature / unguessable token) and
+# are called by machines that can't hold a session cookie.
+_ALLOW_PREFIXES = ("/api/channels/webhook/", "/api/triggers/hook/")
 
 
 class TeamAuthMiddleware(BaseHTTPMiddleware):
@@ -38,7 +41,8 @@ class TeamAuthMiddleware(BaseHTTPMiddleware):
         request.state.user = user
 
         path = request.url.path
-        if path.startswith("/api") and path not in _ALLOW and user is None:
+        if (path.startswith("/api") and path not in _ALLOW and user is None
+                and not path.startswith(_ALLOW_PREFIXES)):
             return JSONResponse({"detail": "authentication required"}, status_code=401)
 
         return await call_next(request)

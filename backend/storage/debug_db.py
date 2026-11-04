@@ -361,6 +361,27 @@ def get_session(session_id: str) -> dict[str, Any]:
         conn.close()
 
 
+def prune(*, older_than_iso: Optional[str] = None, max_runs: Optional[int] = None) -> int:
+    """Delete runs older than ``older_than_iso`` and/or beyond the newest
+    ``max_runs``; child entries go with them. Returns rows removed."""
+    conn = get_connection()
+    try:
+        removed = 0
+        if older_than_iso:
+            removed += conn.execute("DELETE FROM debug_runs WHERE start_time < ?",
+                                    (older_than_iso,)).rowcount
+        if max_runs and max_runs > 0:
+            removed += conn.execute(
+                "DELETE FROM debug_runs WHERE run_id IN (SELECT run_id FROM debug_runs "
+                "ORDER BY start_time DESC LIMIT -1 OFFSET ?)", (max_runs,)).rowcount
+        if removed:
+            conn.execute("DELETE FROM debug_entries WHERE run_id NOT IN (SELECT run_id FROM debug_runs)")
+        conn.commit()
+        return removed
+    finally:
+        conn.close()
+
+
 def clear(session_id: Optional[str] = None) -> int:
     conn = get_connection()
     try:
