@@ -295,6 +295,11 @@ class ChannelManager:
         token = CURRENT_INBOUND.set(msg)
         ack_task = None
         typing_task = None
+        if adapter:
+            try:
+                await adapter.mark_read(msg)
+            except Exception:  # noqa: BLE001
+                pass
         try:
             if adapter and adapter.capabilities.get("typing"):
                 typing_task = self._spawn(self._typing_loop(adapter, msg.conversation_id))

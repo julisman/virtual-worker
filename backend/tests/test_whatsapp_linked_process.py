@@ -27,7 +27,8 @@ FAKE_BRIDGE = textwrap.dedent(r'''
     for line in sys.stdin:
         cmd = json.loads(line)
         if cmd["type"] == "send":
-            emit({"type": "result", "id": cmd["id"], "ok": True, "messageId": "OUT-" + cmd["to"]})
+            emit({"type": "result", "id": cmd["id"], "ok": True,
+                  "messageId": "OUT-" + cmd["to"] + ("+quoted" if cmd.get("quotedKey") else "")})
         elif cmd["type"] == "pair":
             emit({"type": "status", "state": "qr", "pairingCode": "ABCD-1234"})
             emit({"type": "result", "id": cmd["id"], "ok": True, "messageId": "ABCD-1234"})
@@ -81,6 +82,8 @@ def test_linked_adapter_full_round_trip(fake_bridge, tmp_path):
         # send round-trip through stdin/stdout
         mid = await ad.send("628111", "hi there")
         assert mid == "OUT-628111@s.whatsapp.net"
+        mid = await ad.send("628111", "quoted reply", reply_to="M1")
+        assert mid == "OUT-628111@s.whatsapp.net+quoted"
         # pairing code request
         ad._status["state"] = "qr"
         out = await ad.pair()

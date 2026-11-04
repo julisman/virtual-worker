@@ -121,6 +121,7 @@ class WhatsAppLinkedAdapter(ChannelAdapter):
         self._write_lock = asyncio.Lock()
         self._qr: str | None = None
         self._pairing_code: str | None = None
+        self._keys: dict[str, dict] = {}   # recent inbound message id → full key (for quoting / read receipts)
 
     # ---- lifecycle ---------------------------------------------------------- #
     async def start(self) -> None:
@@ -223,6 +224,11 @@ class WhatsAppLinkedAdapter(ChannelAdapter):
             except Exception:  # noqa: BLE001
                 logger.debug("bad bridge message", exc_info=True)
                 return
+            if msg.event_id and ev.get("key"):
+                self._keys[msg.event_id] = ev["key"]
+                if len(self._keys) > 500:
+                    for k in list(self._keys)[:100]:
+                        self._keys.pop(k, None)
             await self.on_inbound(msg)
         elif t == "result":
             f = self._pending.pop(ev.get("id") or "", None)
@@ -263,7 +269,10 @@ class WhatsAppLinkedAdapter(ChannelAdapter):
         jid = to_jid(target)
         last = "sent"
         if text:
-            last = await self._command({"type": "send", "to": jid, "text": text, "replyTo": reply_to})
+            cmd = {"type": "send", "to": jid, "text": text, "replyTo": reply_to}
+            if reply_to and reply_to in self._keys:
+                cmd["quotedKey"] = self._keys[reply_to]
+            last = await self._command(cmd)
         for a in attachments or []:
             payload: dict = {"type": "send", "to": jid}
             if a.kind == "image":
@@ -283,7 +292,7 @@ class WhatsAppLinkedAdapter(ChannelAdapter):
             pass
 
     async def mark_read(self, msg: InboundMessage) -> None:
-        key = (msg.raw or {}).get("key")
+        key = (msg.raw or {}).get("key") or self._keys.get(msg.event_id)
         if not key or self._status.get("state") != "open":
             return
         try:
