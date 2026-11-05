@@ -38,11 +38,11 @@ logger = logging.getLogger(__name__)
 
 # Channels shipped in this milestone. Local ones are always available; network
 # ones are opt-in (see webhook).
-CHANNELS = ("in_app", "desktop", "webhook", "chat")
+CHANNELS = ("in_app", "desktop", "webhook", "chat", "email")
 # Channels that address a real recipient — an explicit target is mandatory
 # (FR-3 / anti-PR-#648). Desktop is a local notification with no recipient.
-REQUIRES_TARGET = {"in_app", "webhook", "chat"}
-NETWORK_CHANNELS = {"webhook", "chat"}
+REQUIRES_TARGET = {"in_app", "webhook", "chat", "email"}
+NETWORK_CHANNELS = {"webhook", "chat", "email"}
 
 MAX_PAYLOAD_BYTES = 256 * 1024   # rate/size guard (FR-14)
 WEBHOOK_TIMEOUT = 15.0
@@ -110,6 +110,58 @@ async def _send_webhook(target: str, text: str, subject: str | None,
     return f"POST {r.status_code}"
 
 
+def _smtp_factory(host: str, port: int, use_ssl: bool):
+    """Test seam: returns a connected smtplib client."""
+    import smtplib
+    if use_ssl:
+        return smtplib.SMTP_SSL(host, port, timeout=20)
+    return smtplib.SMTP(host, port, timeout=20)
+
+
+def _send_email_sync(target: str, text: str, subject: str | None) -> str:
+    """SMTP send to an allow-listed recipient via a configured email target."""
+    from email.message import EmailMessage
+
+    tgt = channel_store.email_target_for(target)
+    if tgt is None:
+        raise RuntimeError(
+            "no enabled email delivery target allows this recipient — add the address or its "
+            "@domain to an email target's allow-list first (network egress is opt-in)")
+    cfg = tgt["config"]
+    secrets = channel_store.get_secrets(tgt["id"])
+    host = (cfg.get("host") or "").strip()
+    port = int(cfg.get("port") or 587)
+    if not host:
+        raise RuntimeError("email target has no SMTP host")
+    sender = (cfg.get("from") or cfg.get("username") or "").strip()
+    if not sender:
+        raise RuntimeError("email target has no 'from' address")
+    tls = (cfg.get("tls") or ("ssl" if port == 465 else "starttls")).lower()
+    msg = EmailMessage()
+    msg["From"] = sender
+    msg["To"] = target
+    msg["Subject"] = (subject or "Virtual Worker")[:200]
+    msg.set_content(text)
+    client = _smtp_factory(host, port, tls == "ssl")
+    try:
+        if tls == "starttls":
+            client.starttls()
+        if cfg.get("username") and secrets.get("password"):
+            client.login(cfg["username"], secrets["password"])
+        client.send_message(msg)
+    finally:
+        try:
+            client.quit()
+        except Exception:  # noqa: BLE001
+            pass
+    return f"sent via {host}"
+
+
+async def _send_email(target: str, text: str, subject: str | None) -> str:
+    import asyncio
+    return await asyncio.to_thread(_send_email_sync, target, text, subject)
+
+
 async def _send_chat(target: str, text: str, subject: str | None,
                      agent_id: str | None, source: str) -> dict:
     """Send through a connected chat channel. ``target`` is
@@ -166,6 +218,8 @@ async def deliver(channel: str, target: str, text: str, *,
             await _send_webhook(target, text, subject, data, agent_id, source)
         elif channel == "chat":
             return await _send_chat(target, text, subject, agent_id, source)
+        elif channel == "email":
+            await _send_email(target, text, subject)
         return _record("sent")
     except Exception as exc:  # noqa: BLE001
         logger.warning("delivery via %s failed: %s", channel, exc)
@@ -185,7 +239,7 @@ def make_deliver_tool(agent_id: str) -> dict[str, dict]:
         target = (target or "").strip()
         text = text or ""
         if not channel:
-            return "deliver needs 'channel' — one of: in_app, desktop, webhook, chat."
+            return "deliver needs 'channel' — one of: in_app, desktop, webhook, chat, email."
         if not text.strip():
             return "deliver needs 'text' — the message to send."
         if channel.lower() in REQUIRES_TARGET and not target:
@@ -209,15 +263,17 @@ def make_deliver_tool(agent_id: str) -> dict[str, dict]:
                         "Send a message to a person/destination NOW via a configured channel: "
                         "'in_app' (post into a chat session — target is the session id/alias), "
                         "'desktop' (a macOS notification — no target needed), or 'webhook' "
-                        "(HTTP POST to an allow-listed URL — target is that URL). You MUST name "
+                        "(HTTP POST to an allow-listed URL — target is that URL), 'chat' (a connected chat "
+                        "channel — target is '<accountId>:<phone-or-chat-id>'), or 'email' (target is an "
+                        "allow-listed address). You MUST name "
                         "an explicit 'target'; the system never guesses or reuses a recipient. "
                         "Use this to report a result or escalate mid-run."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "channel": {"type": "string", "description": "in_app | desktop | webhook | chat"},
-                            "target": {"type": "string", "description": "explicit destination: chat session id/alias, a webhook URL, or for chat '<accountId>:<phone-or-chat-id>'"},
+                            "channel": {"type": "string", "description": "in_app | desktop | webhook | chat | email"},
+                            "target": {"type": "string", "description": "explicit destination: chat session id/alias, a webhook URL, an email address, or for chat '<accountId>:<phone-or-chat-id>'"},
                             "text": {"type": "string", "description": "the message body"},
                             "subject": {"type": "string", "description": "optional title/subject"},
                         },

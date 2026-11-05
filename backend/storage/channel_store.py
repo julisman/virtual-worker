@@ -23,8 +23,11 @@ import uuid
 from datetime import datetime, timezone
 
 from config import db_path, ensure_dir
+from storage import settings
 
 _lock = threading.Lock()
+
+_SECRETS_KEY = "deliveryTargetSecrets"
 
 KINDS = ("in_app", "desktop", "webhook", "email", "slack", "telegram")
 STATUSES = ("sent", "failed", "queued", "dropped")
@@ -137,7 +140,57 @@ def update_channel(channel_id: str, **fields) -> dict | None:
 def delete_channel(channel_id: str) -> bool:
     with _lock, _conn() as conn:
         cur = conn.execute("DELETE FROM channels WHERE id=?", (channel_id,))
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+    set_secrets(channel_id, None)
+    return deleted
+
+
+# --------------------------------------------------------------------------- #
+# Write-only secrets (settings.json, never the DB, never echoed back)
+# --------------------------------------------------------------------------- #
+
+def get_secrets(channel_id: str) -> dict:
+    allv = settings.get(_SECRETS_KEY) or {}
+    v = allv.get(channel_id) if isinstance(allv, dict) else None
+    return dict(v) if isinstance(v, dict) else {}
+
+
+def set_secrets(channel_id: str, values: dict | None) -> None:
+    allv = settings.get(_SECRETS_KEY) or {}
+    if not isinstance(allv, dict):
+        allv = {}
+    if values is None:
+        allv.pop(channel_id, None)
+    else:
+        cur = dict(allv.get(channel_id) or {})
+        for k, v in values.items():
+            if v is None or v == "":
+                cur.pop(k, None)
+            else:
+                cur[k] = str(v)
+        allv[channel_id] = cur
+    settings.set(_SECRETS_KEY, allv or None)
+
+
+def secret_flags(channel_id: str) -> dict:
+    cur = get_secrets(channel_id)
+    return {f"has{k[0].upper()}{k[1:]}": bool(v) for k, v in cur.items()}
+
+
+def email_target_for(address: str) -> dict | None:
+    """The first *enabled* email target whose ``allowTo`` list permits
+    ``address`` (exact address, or ``@domain``). None → refuse to send."""
+    addr = (address or "").strip().lower()
+    if "@" not in addr:
+        return None
+    domain = "@" + addr.rsplit("@", 1)[1]
+    for c in list_channels():
+        if c["kind"] != "email" or not c["enabled"]:
+            continue
+        allow = [str(x).strip().lower() for x in (c["config"].get("allowTo") or []) if str(x).strip()]
+        if addr in allow or domain in allow or "*" in allow:
+            return c
+    return None
 
 
 def webhook_allowlist() -> set[str]:

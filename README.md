@@ -32,11 +32,13 @@ MCP server, a remote upstream, or a connected chat channel.
   tools, and guardrails. Chat with them in the web UI with streaming tool activity.
 - **Agent harness**: tool registry, agent loop, context budgeting, automatic guardrails
   (working-folder confinement, shell deny-list, caps, kill switch), and a verify pass.
+- **Document reading**: agents open PDF, Word, Excel, PowerPoint, CSV and text files from
+  their working folder and from chat attachments, in chunks that fit the context.
 - **Task board and activity feed** per agent, with an always-on worker that pulls tasks
   when the agent is on duty.
 - **Schedules** (cron and one-time) and **triggers** (file watch, inbound webhook).
-- **Outbound delivery** to in-app chat, desktop notifications and webhooks, with an audit
-  log.
+- **Outbound delivery** to in-app chat, desktop notifications, webhooks, email (SMTP, to an
+  allow-list) and connected chat channels, with an audit log.
 - **Skills** as portable `SKILL.md` packs with progressive disclosure.
 - **Knowledge bases** with local embeddings and cited retrieval.
 - **Templates**: deploy a ready-made agent from a gallery, export or import bundles.

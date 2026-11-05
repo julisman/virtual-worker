@@ -32,6 +32,8 @@ class ChannelIn(BaseModel):
     name: str | None = None
     enabled: bool | None = None
     config: dict | None = None
+    secrets: dict | None = None  # write-only (e.g. SMTP password)
+
 
 
 class DeliverIn(BaseModel):
@@ -47,9 +49,13 @@ class DeliverIn(BaseModel):
 # Channels
 # --------------------------------------------------------------------------- #
 
+def _view(c: dict) -> dict:
+    return {**c, "secrets": channel_store.secret_flags(c["id"])}
+
+
 @router.get("/delivery-targets")
 async def list_channels():
-    return {"channels": channel_store.list_channels()}
+    return {"channels": [_view(c) for c in channel_store.list_channels()]}
 
 
 @router.post("/delivery-targets")
@@ -57,21 +63,27 @@ async def create_channel(body: ChannelIn):
     if not (body.kind or "").strip():
         raise HTTPException(400, "kind is required")
     try:
-        return channel_store.create_channel(
+        c = channel_store.create_channel(
             body.kind, body.name or body.kind,
             enabled=bool(body.enabled), config=body.config or {})
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    if body.secrets:
+        channel_store.set_secrets(c["id"], body.secrets)
+    return _view(c)
 
 
 @router.patch("/delivery-targets/{channel_id}")
 async def update_channel(channel_id: str, body: ChannelIn):
     fields = body.model_dump(exclude_none=True)
     fields.pop("kind", None)  # kind is immutable
-    c = channel_store.update_channel(channel_id, **fields)
+    secrets = fields.pop("secrets", None)
+    c = channel_store.update_channel(channel_id, **fields) if fields else channel_store.get_channel(channel_id)
     if not c:
         raise HTTPException(404, "no such channel")
-    return c
+    if secrets:
+        channel_store.set_secrets(channel_id, secrets)
+    return _view(c)
 
 
 @router.delete("/delivery-targets/{channel_id}")

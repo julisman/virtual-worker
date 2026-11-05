@@ -382,7 +382,7 @@ class ChannelManager:
         elif text:
             parts.append(text)
         for a in msg.attachments:
-            desc = f"(attached {a.kind}: {a.name or os.path.basename(a.path)} at {a.path}"
+            desc = f"(attached {a.kind}: {a.name or os.path.basename(a.path)} at {a.path} — open it with document_read"
             if a.caption:
                 desc += f" — caption: {a.caption}"
             parts.append(desc + ")")

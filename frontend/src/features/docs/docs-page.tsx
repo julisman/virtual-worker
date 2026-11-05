@@ -75,7 +75,7 @@ const CATEGORIES: Category[] = [
       { id: "skills", title: "Skills", icon: SkillsIcon, keywords: "skillpack skill.md procedural knowledge enable disable load agentskills" },
       { id: "mcp", title: "MCP Servers", icon: McpIcon, keywords: "model context protocol tools servers stdio sse connect external tools" },
       { id: "memory", title: "Memory", icon: MemoryIcon, keywords: "agent memory remember facts persistent recall context" },
-      { id: "schedule", title: "Schedules", icon: ClockIcon, keywords: "cron scheduled task timer recurring daily weekly hourly one-time at 2pm 5pm reminder summary autonomous fire run now next run" },
+      { id: "schedule", title: "Schedules", icon: ClockIcon, keywords: "cron scheduled task timer recurring daily weekly hourly one-time at 2pm 5pm reminder summary autonomous fire run now next run deliver email smtp webhook chat channel" },
     ],
   },
   {
@@ -395,7 +395,7 @@ Step-by-step markdown the agent follows…`}</Pre>
       ]} />
       <P><Term>In the chat</Term> — <Code>/reset</Code> starts the conversation over, <Code>/status</Code> shows which agent and model answer, <Code>/help</Code> lists commands. Each chat keeps its own history (the last turns are replayed to the model). Reasoning is never sent; long answers are split; a short “Working on it…” is sent if a turn takes a while.</P>
       <P><Term>Proactive messages</Term> — turn on <Term>Message people on channels</Term> in an agent's Guardrails to give it the <Code>channel_send</Code> tool (for reminders or follow-ups). Schedules and the <Code>deliver</Code> tool can also target a chat with channel <Code>chat</Code> and target <Code>&lt;accountId&gt;:&lt;number&gt;</Code>. Every send is audited and the account never messages itself.</P>
-      <Tip>Attachments people send (images, documents) are saved under the account's media folder and described to the agent; enable “Pass received images to the model” only with a vision-capable model.</Tip>
+      <Tip>Attachments people send (images, documents) are saved under the account's media folder and described to the agent, which can open PDF, Word, Excel, PowerPoint, CSV and text files with its <Code>document_read</Code> tool. Enable “Pass received images to the model” only with a vision-capable model.</Tip>
     </>
   ),
 

@@ -17,6 +17,7 @@ from datetime import datetime
 from agent import loop
 from agent.custom_tools import make_custom_tools
 from agent.channel_tools import make_channel_tools
+from agent.doc_tools import DOC_TOOL_NAMES, make_doc_tools
 from agent.delivery import make_deliver_tool
 from agent.fs_tools import FS_TOOL_NAMES, make_fs_tools
 from agent.intern import build_board_context, make_intern_tools
@@ -66,6 +67,15 @@ def compose(agent: dict | None, *, extra_system: str | None = None,
         registry.update(make_fs_tools(working_dir))
         system = (f"{system}\n\nYou have file tools ({', '.join(FS_TOOL_NAMES)}) scoped to the "
                   f"working folder `{working_dir.strip()}`. All paths are relative to it.").strip()
+
+    # "Your documents" — read PDF/Office/CSV files from the working folder and from
+    # chat-channel attachments (saved under <VW_HOME>/channels/*/media).
+    import config as _config
+    doc_roots = [working_dir.strip()] if working_dir.strip() else []
+    doc_roots.append(str(_config.APP_HOME / "channels"))
+    registry.update(make_doc_tools(doc_roots))
+    system = (f"{system}\n\nYou can read documents (PDF, Word, Excel, PowerPoint, CSV, text) with "
+              f"{', '.join(DOC_TOOL_NAMES)}; files people send you in chat arrive as absolute paths.").strip()
 
     # "Your memory" — always on.
     if agent_id:

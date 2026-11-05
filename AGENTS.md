@@ -95,6 +95,14 @@ inbound (browser / coding agents / later: chat channels)
   → runtime.llama_manager (managed model server) ─httpx─▶ upstream (:8080)
 ```
 
+- **Document tools** (`agent/doc_tools.py`): `document_read` / `document_info` for PDF
+  (pypdf), docx/xlsx/pptx (stdlib zip + xml), CSV and text. Always composed; paths must be
+  under the working folder or `<VW_HOME>/channels` (where chat attachments land). Output
+  is chunked with `offset`/`pages`/`sheet`.
+- **Delivery kinds** (`agent/delivery.py`): `in_app`, `desktop`, `webhook` (URL
+  allow-list), `chat` (`<accountId>:<conversation>`), `email` (SMTP target with an
+  `allowTo` allow-list; password write-only under `deliveryTargetSecrets`). Every send is
+  audited in `deliveries`.
 - **Agent tools** are assembled per run in `agent/compose.py` as a registry
   `{name: {"schema": <openai fn schema>, "fn": <async callable>}}`, then passed to
   `agent/loop.py:run()`. Per-agent tool factories follow one pattern (see

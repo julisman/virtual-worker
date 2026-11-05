@@ -391,9 +391,11 @@ const DELIVERY_CHANNELS = [
   { kind: "in_app", label: "Chat thread", needsTarget: true, placeholder: "chat session id / alias (e.g. daily-summary)" },
   { kind: "desktop", label: "Desktop notification", needsTarget: false, placeholder: "" },
   { kind: "webhook", label: "Webhook", needsTarget: true, placeholder: "https://your-automation/hook" },
+  { kind: "email", label: "Email", needsTarget: true, placeholder: "name@example.com (must be allow-listed in Settings → Email)" },
+  { kind: "chat", label: "Chat channel", needsTarget: true, placeholder: "<channel account id>:<phone or chat id>" },
 ] as const;
 const CHANNEL_LABEL: Record<string, string> = {
-  in_app: "Chat", desktop: "Desktop", webhook: "Webhook",
+  in_app: "Chat", desktop: "Desktop", webhook: "Webhook", email: "Email", chat: "Chat channel",
 };
 
 const REPEATS = [
@@ -571,7 +573,7 @@ export function ScheduleView({ agentId }: { agentId: string }) {
                     <input className={`${inputCls} h-8 flex-1 py-1 text-xs`} value={delTarget[c.kind] || ""} placeholder={c.placeholder}
                       onChange={(e) => setDelTarget((t) => ({ ...t, [c.kind]: e.target.value }))} />
                   )}
-                  {delOn[c.kind] && c.kind === "webhook" && (
+                  {delOn[c.kind] && (c.kind === "webhook" || c.kind === "email" || c.kind === "chat") && (
                     <span className="text-[10px] text-warn">data leaves your machine</span>
                   )}
                 </div>

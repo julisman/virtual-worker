@@ -219,6 +219,7 @@ The product is built around five ideas:
   with an SSRF guard, read/write/edit file, shell (tiered), memory read/write, load skill
   and load skill resource, document read (PDF, docx, xlsx, pptx, csv), board tools,
   schedule tools, deliver, and channel send.
+  _Document read implemented 2026-11-05 (`agent/doc_tools.py`)._
 - FR-H6. MCP client: attach stdio or HTTP MCP servers per worker with a tool allow-list.
 - FR-H7. Skills: progressive disclosure. Catalog line in the system prompt, full body on
   `load_skill`, bundled files on `load_skill_resource`. Upload as folder or zip.
@@ -296,6 +297,7 @@ The product is built around five ideas:
 - FR-D1. Delivery channel kinds: chat channel account, webhook, desktop notification,
   email (SMTP). Each is a configured, enabled record with non-secret config and write-only
   secrets.
+  _All five kinds implemented 2026-11-05 (email: SMTP target with recipient allow-list)._
 - FR-D2. Schedules, triggers and the board worker can target a delivery; a worker can also
   call `deliver` mid-run when allowed.
 - FR-D3. Every send is recorded with target, status, error and the run that produced it.

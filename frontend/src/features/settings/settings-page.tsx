@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiJson, apiPost } from "@/lib/api";
 import { BackupCard } from "./backup-card";
+import { EmailCard } from "./email-card";
 import { TeamSettings } from "@/features/team/team-settings";
 
 interface Engine {
@@ -148,6 +149,7 @@ export function SettingsPage() {
             a model that's currently running keeps its loaded version until you re-activate it.
           </p>
 
+          <EmailCard />
           <BackupCard />
           <TeamSettings />
         </div>

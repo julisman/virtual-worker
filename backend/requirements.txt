@@ -5,6 +5,8 @@ httpx>=0.27
 pydantic>=2.7
 # MCP — connect agents to external tool providers (Model Context Protocol)
 mcp>=1.2
+# Document reading (PDF text extraction; Office formats use the stdlib zip/xml readers)
+pypdf>=5.0
 # dev
 pytest>=8.0
 python-multipart>=0.0.9
