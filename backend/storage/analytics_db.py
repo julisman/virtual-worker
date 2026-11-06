@@ -19,6 +19,7 @@ or "unknown" rather than raising, so analytics works on a bare debug DB too.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 
 from storage import debug_db
@@ -48,18 +49,6 @@ def _bounds(frm: Optional[str], to: Optional[str]) -> tuple[str, str]:
     return lo, hi
 
 
-def _filter_sql(filters: dict[str, Any]) -> tuple[str, list[Any]]:
-    """Build an extra ``AND col = ?`` clause for the column-mapped filters."""
-    clauses: list[str] = []
-    params: list[Any] = []
-    for key in ("provider", "model", "endpoint"):
-        val = filters.get(key)
-        if val:
-            clauses.append(f"{key} = ?")
-            params.append(val)
-    return (" AND " + " AND ".join(clauses)) if clauses else "", params
-
-
 def _bucket_expr(bucket: str) -> str:
     """SQL expression for the day/week bucket key over ``start_time``."""
     if bucket == "week":
@@ -87,7 +76,8 @@ def _session_agent_map(conn, session_ids: set[str]) -> dict[str, Optional[str]]:
     for sid in session_ids:
         if sid.startswith("worker:"):
             out[sid] = sid.split(":", 1)[1] or None
-        elif sid.startswith("chat:"):
+        elif sid.startswith("chat:") or sid.count(":") >= 2:
+            # in-app chat and chat-channel sessions both live in chat_sessions
             chat_ids.add(sid)
             out[sid] = None
         elif sid.startswith("schedule:"):
@@ -123,6 +113,28 @@ def _session_agent_map(conn, session_ids: set[str]) -> dict[str, Optional[str]]:
     return out
 
 
+def _agent_session_ids(conn, agent_id: str) -> set[str]:
+    """Return known debug sessions attributable to one agent."""
+    sessions = {
+        r["session_id"]
+        for r in conn.execute("SELECT DISTINCT session_id FROM debug_runs").fetchall()
+    }
+    worker_prefix = f"worker:{agent_id}"
+    out = {sid for sid in sessions if sid.startswith(worker_prefix)}
+
+    if _table_exists(conn, "chat_sessions"):
+        rows = conn.execute(
+            "SELECT id FROM chat_sessions WHERE agent_id = ?", (agent_id,)
+        ).fetchall()
+        out.update(r["id"] for r in rows)
+    if _table_exists(conn, "schedules"):
+        rows = conn.execute(
+            "SELECT id FROM schedules WHERE agent_id = ?", (agent_id,)
+        ).fetchall()
+        out.update(f"schedule:{r['id']}" for r in rows)
+    return out
+
+
 def _agent_names(conn, agent_ids: set[str]) -> dict[str, str]:
     """Resolve agent ids to display names (best-effort)."""
     names: dict[str, str] = {}
@@ -145,14 +157,35 @@ def _round_cost(v: Any) -> float:
     return round(float(v or 0.0), 6)
 
 
+def _filter_sql(filters: dict[str, Any], conn=None) -> tuple[str, list[Any]]:
+    """Build SQL filters, including an attribution-aware agent session set."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    for key in ("provider", "model", "endpoint"):
+        val = filters.get(key)
+        if val:
+            clauses.append(f"{key} = ?")
+            params.append(val)
+    agent_id = filters.get("agent")
+    if agent_id and conn is not None:
+        session_ids = _agent_session_ids(conn, str(agent_id))
+        if session_ids:
+            placeholders = ",".join("?" for _ in session_ids)
+            clauses.append(f"session_id IN ({placeholders})")
+            params.extend(sorted(session_ids))
+        else:
+            clauses.append("1 = 0")
+    return (" AND " + " AND ".join(clauses)) if clauses else "", params
+
+
 def summary(frm: Optional[str] = None, to: Optional[str] = None,
             filters: Optional[dict] = None) -> dict[str, Any]:
     """Top KPI tiles for the window: calls, tokens, cost, errors, avg latency."""
     filters = filters or {}
     lo, hi = _bounds(frm, to)
-    extra, fparams = _filter_sql(filters)
     conn = debug_db.get_connection()
     try:
+        extra, fparams = _filter_sql(filters, conn)
         r = conn.execute(
             f"""
             SELECT
@@ -170,6 +203,20 @@ def summary(frm: Optional[str] = None, to: Optional[str] = None,
             """,
             [lo, hi, *fparams],
         ).fetchone()
+        latency_rows = conn.execute(
+            f"""
+            SELECT duration_ms
+            FROM debug_runs
+            WHERE start_time >= ? AND start_time <= ?{extra}
+              AND duration_ms IS NOT NULL
+            ORDER BY duration_ms ASC
+            """,
+            [lo, hi, *fparams],
+        ).fetchall()
+        latencies = [row["duration_ms"] for row in latency_rows]
+        p95 = (int(latencies[min(len(latencies) - 1,
+                                math.ceil(0.95 * len(latencies)) - 1)])
+               if latencies else None)
         calls = r["calls"] or 0
         errors = r["errors"] or 0
         return {
@@ -185,6 +232,7 @@ def summary(frm: Optional[str] = None, to: Optional[str] = None,
             "errorRate": round(errors / calls, 4) if calls else 0.0,
             "toolCalls": r["tool_calls"] or 0,
             "avgLatencyMs": round(r["avg_latency"]) if r["avg_latency"] is not None else None,
+            "p95LatencyMs": p95,
         }
     finally:
         conn.close()
@@ -196,10 +244,10 @@ def trends(frm: Optional[str] = None, to: Optional[str] = None,
     filters = filters or {}
     bucket = "week" if bucket == "week" else "day"
     lo, hi = _bounds(frm, to)
-    extra, fparams = _filter_sql(filters)
     bexpr = _bucket_expr(bucket)
     conn = debug_db.get_connection()
     try:
+        extra, fparams = _filter_sql(filters, conn)
         rows = conn.execute(
             f"""
             SELECT

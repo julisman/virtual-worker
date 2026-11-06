@@ -127,14 +127,10 @@ export function ConnectPage() {
     loadTokens();
   }, [loadTokens, token]);
 
-  // Clients connect to the backend (the gateway), not the Vite dev server.
-  const base = useMemo(() => {
-    const origin = window.location.origin;
-    // In dev the page is served by Vite; point clients straight at the backend port.
-    const devBackend = import.meta.env.VITE_BACKEND_PORT || "8889";
-    return origin.includes(`:${import.meta.env.VITE_FRONTEND_PORT || "5173"}`)
-      ? origin.replace(/:\d+$/, `:${devBackend}`) : origin;
-  }, []);
+  // Clients connect to the gateway. In packaged/stable the origin IS the
+  // gateway; in dev the Vite server proxies /v1 + /api to the backend, so the
+  // origin works there too — no port to hardcode or keep in sync.
+  const base = useMemo(() => window.location.origin, []);
 
   const activeTokens = tokens.filter((t) => !t.revoked && !t.expired);
   const keyRequired = (info?.gatewayKeyRequired ?? false) || activeTokens.length > 0;

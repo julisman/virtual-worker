@@ -18,7 +18,7 @@ def db(tmp_path, monkeypatch):
 
 
 def _patch_verdict(monkeypatch, text):
-    async def fake_complete(model, system, user):
+    async def fake_complete(model, system, user, provider=None):
         return text
     monkeypatch.setattr(verify, "_complete", fake_complete)
 
@@ -77,3 +77,20 @@ def test_verify_attempts_capped(db, monkeypatch):
     asyncio.run(mgr._verify(a["id"], "m", task_store.get(a["id"], t["id"])))
     # Cap reached -> accept done instead of ping-ponging forever.
     assert task_store.get(a["id"], t["id"])["status"] == "done"
+
+
+def test_verify_finds_verdict_in_chatty_reply(monkeypatch):
+    # Chatty local models often preamble before the verdict line — the parser
+    # must find NEEDS_WORK on a later line, not read line 1 as a pass.
+    _patch_verdict(monkeypatch, "Let me review.\nThe work lacks coverage.\n"
+                                "NEEDS_WORK: no tests were added")
+    ok, reason = asyncio.run(verify.verify_task("m", {"title": "x"}))
+    assert ok is False and "tests" in reason
+
+
+def test_verify_unparseable_reply_is_inconclusive_not_a_verdict(monkeypatch):
+    # No VERIFIED/NEEDS_WORK anywhere: fail open (like an unavailable reviewer)
+    # but say so, instead of counting arbitrary text as a pass verdict.
+    _patch_verdict(monkeypatch, "Sure! The task looks plausibly fine to me overall.")
+    ok, reason = asyncio.run(verify.verify_task("m", {"title": "x"}))
+    assert ok is True and "inconclusive" in reason

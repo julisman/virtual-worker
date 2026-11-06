@@ -3,6 +3,7 @@
 """GET /api/engines (installed, local), GET /api/engines/check (latest, network),
 POST /api/engines/{key}/update (run the update)."""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -16,7 +17,8 @@ router = APIRouter()
 
 @router.get("")
 async def list_engines():
-    return {"engines": engines.current()}
+    # current() shells out to `llama-server --version` — keep it off the loop.
+    return {"engines": await asyncio.to_thread(engines.current)}
 
 
 @router.get("/check")

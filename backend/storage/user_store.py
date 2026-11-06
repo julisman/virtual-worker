@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import secrets
 import sqlite3
+from storage import _sqlite
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -38,7 +39,7 @@ _DEFAULT_SESSION_DAYS = 7
 
 
 def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path())
+    conn = _sqlite.connect(db_path())
     conn.row_factory = sqlite3.Row
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -59,6 +60,7 @@ def _conn() -> sqlite3.Connection:
             expires_at  TEXT NOT NULL
         )
     """)
+    conn.mark_initialized()
     return conn
 
 

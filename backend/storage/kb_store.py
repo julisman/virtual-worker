@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from storage import _sqlite
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -41,7 +42,7 @@ def _now() -> str:
 def _conn() -> sqlite3.Connection:
     p = db_path()
     ensure_dir(p.parent)
-    conn = sqlite3.connect(str(p))
+    conn = _sqlite.connect(str(p))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -70,6 +71,7 @@ def _conn() -> sqlite3.Connection:
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_kb_chunk_kb ON kb_chunk(kb_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_kb_chunk_source ON kb_chunk(kb_id, source)")
+    conn.mark_initialized()
     return conn
 
 

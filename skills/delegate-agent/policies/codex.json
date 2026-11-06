@@ -1,0 +1,17 @@
+{
+  "economy": {
+    "description": "Prefer Luna for routine work, then use the catalog default.",
+    "preferred_canonical_models": ["gpt-5.6-luna"],
+    "fallback": "catalog-default"
+  },
+  "default": {
+    "description": "Use the current Codex catalog default model.",
+    "preferred_canonical_models": [],
+    "fallback": "catalog-default"
+  },
+  "capable": {
+    "description": "Prefer Terra for difficult work, then Luna, then the catalog default.",
+    "preferred_canonical_models": ["gpt-5.6-terra", "gpt-5.6-luna"],
+    "fallback": "catalog-default"
+  }
+}

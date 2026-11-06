@@ -22,10 +22,8 @@ Sandboxed ``script`` (Python) tools are a deferred milestone (PRD-10 §M3).
 
 from __future__ import annotations
 
-import ipaddress
+import asyncio
 import logging
-import socket
-import urllib.parse
 
 import httpx
 
@@ -38,30 +36,33 @@ MAX_RESULT_CHARS = 8000
 
 
 def _is_blocked_host(url: str) -> bool:
-    """True when ``url``'s host resolves to a loopback/private/link-local/reserved
-    address — the SSRF guard. Mirrors ``agent/tools.py``'s web_fetch check, but
-    fails closed: an unresolvable host is treated as blocked."""
-    try:
-        host = urllib.parse.urlparse(url).hostname or ""
-    except ValueError:
-        return True
-    if not host:
-        return True
-    if host in ("localhost", "localhost.localdomain"):
-        return True
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return True  # can't resolve -> don't reach out
-    for info in infos:
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
+    """The SSRF guard — delegates to the canonical fail-closed implementation in
+    ``agent/tools.py`` so the two can't drift (they used to disagree: this one
+    failed closed, that one failed open)."""
+    from agent.tools import _is_private_host
+    return _is_private_host(url)
+
+
+def _expand_dotted(flat: dict) -> dict:
+    """Expand dotted keys into nested objects so an endpoint expecting a nested
+    body can be described with a flat builder. ``{"message.input_str": "hi"}``
+    becomes ``{"message": {"input_str": "hi"}}``. A key with no dot is left as-is;
+    a path that collides with a non-dict value replaces it with a nested object."""
+    out: dict = {}
+    for key, val in flat.items():
+        if "." not in key:
+            out[key] = val
             continue
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            return True
-    return False
+        parts = key.split(".")
+        node = out
+        for part in parts[:-1]:
+            nxt = node.get(part)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                node[part] = nxt
+            node = nxt
+        node[parts[-1]] = val
+    return out
 
 
 def _truncate(text: str) -> str:
@@ -78,6 +79,7 @@ def _make_executor(tool: dict):
     method = (tool.get("method") or "GET").upper()
     url = (tool.get("url") or "").strip()
     headers = tool.get("headers") or {}
+    fixed = tool.get("fixedParams") or {}
     allow_private = bool(tool.get("allowPrivate"))
     timeout = int(tool.get("timeout") or 20)
 
@@ -85,18 +87,32 @@ def _make_executor(tool: dict):
         if not url:
             return f"{name} is misconfigured: no URL set."
         target = url if url.startswith(("http://", "https://")) else "https://" + url
-        if not allow_private and _is_blocked_host(target):
+        if not allow_private and await asyncio.to_thread(_is_blocked_host, target):
             return (f"{name} refused: that host is private/loopback. Enable "
                     "'allow private hosts' on the tool if this is intentional.")
-        # Model args -> query params for GET/DELETE, JSON body otherwise.
+        # Model args + operator-pinned fixed args -> query params for GET/DELETE,
+        # JSON body otherwise. Fixed values win so the model can't override them.
+        payload = {**(args or {}), **fixed}
         kwargs: dict = {"headers": headers}
         if method in ("GET", "DELETE"):
-            kwargs["params"] = args or {}
+            kwargs["params"] = payload  # query strings stay flat
         else:
-            kwargs["json"] = args or {}
+            kwargs["json"] = _expand_dotted(payload)  # dotted keys -> nested JSON
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            # Follow redirects manually so every hop is re-checked against the
+            # SSRF guard — a public URL that 302s to 127.0.0.1 must not slip
+            # through by being validated only on the initial target.
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                 resp = await client.request(method, target, **kwargs)
+                hops = 0
+                while resp.is_redirect and hops < 5:
+                    nxt = str(resp.next_request.url) if resp.next_request else ""
+                    if not nxt or (not allow_private
+                                   and await asyncio.to_thread(_is_blocked_host, nxt)):
+                        return (f"{name} refused: redirect to a private/loopback host "
+                                "was blocked.")
+                    resp = await client.send(resp.next_request)
+                    hops += 1
         except httpx.TimeoutException:
             return f"{name} error: request timed out after {timeout}s"
         except Exception as exc:  # noqa: BLE001

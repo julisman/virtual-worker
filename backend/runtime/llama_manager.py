@@ -26,7 +26,7 @@ from pathlib import Path
 import httpx
 
 import config
-from config import APP_HOME, LLAMA_BIN, LLAMA_CTX, LLAMA_NGL, LLAMA_PORT, MLX_BIN, MLX_VLM_BIN
+from config import APP_HOME, LLAMA_CTX, LLAMA_NGL, LLAMA_PORT
 from storage import settings
 
 
@@ -48,11 +48,11 @@ def _backend_for(path: str) -> str:
 
 
 def _mlx_lm_available() -> bool:
-    return bool(shutil.which(MLX_BIN)) or importlib.util.find_spec("mlx_lm") is not None
+    return bool(shutil.which(config.mlx_bin())) or importlib.util.find_spec("mlx_lm") is not None
 
 
 def _mlx_vlm_available() -> bool:
-    return bool(shutil.which(MLX_VLM_BIN)) or importlib.util.find_spec("mlx_vlm") is not None
+    return bool(shutil.which(config.mlx_vlm_bin())) or importlib.util.find_spec("mlx_vlm") is not None
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,12 @@ _state: dict = {
     "pid": None, "path": None, "ctx": None, "ngl": None, "backend": None,
     "port": LLAMA_PORT, "started_at": None, "managed": False,
 }
+
+# MTP (multi-token-prediction / "nextn") self-speculative decoding for llama.cpp.
+# n-max is the draft depth; 3 is the measured sweet spot for a 9B dense model
+# (deeper drafts get rejected more often and lose the win). Clamped to [1, 8].
+_MTP_N_MAX_DEFAULT = 3
+_MTP_N_MAX_MIN, _MTP_N_MAX_MAX = 1, 8
 
 # Generation-probe result for the active model. /v1/models returning 200 only
 # means the server is *up* — some engines (mlx_lm.server) load the weights lazily
@@ -97,16 +103,19 @@ def _load_state() -> dict | None:
 
 
 def _clear_state():
-    _state.update({"pid": None, "path": None, "started_at": None, "managed": False, "backend": None})
+    _state.update({"pid": None, "path": None, "started_at": None, "managed": False,
+                   "backend": None, "mtp": False, "mtpNMax": _MTP_N_MAX_DEFAULT})
     try:
         _PID_FILE.unlink()
     except OSError:
         pass
 
 
-def _save_pref(path: str, ctx: int, ngl: int, backend: str = "llamacpp", adapter: str | None = None):
+def _save_pref(path: str, ctx: int, ngl: int, backend: str = "llamacpp",
+               adapter: str | None = None, mtp: bool = False, mtp_n_max: int = _MTP_N_MAX_DEFAULT):
     settings.set(_ACTIVE_MODEL_KEY,
-                 {"path": path, "ctx": ctx, "ngl": ngl, "backend": backend, "adapter": adapter})
+                 {"path": path, "ctx": ctx, "ngl": ngl, "backend": backend, "adapter": adapter,
+                  "mtp": bool(mtp), "mtpNMax": int(mtp_n_max)})
 
 
 def _load_pref() -> dict | None:
@@ -176,6 +185,18 @@ async def _healthy(port: int | None = None) -> bool:
 
 
 async def _active_model_id(port: int | None = None) -> str | None:
+    """The id to send as `model` when calling the upstream.
+
+    Prefer the path we started. mlx_vlm.server's /v1/models lists every model in
+    the HF cache (oldest first) rather than the loaded one, and it treats an
+    inbound `model` as a *selector*: naming a different id makes it unload the
+    live model and load that one instead. Asking it "what's loaded?" and echoing
+    the answer back therefore swaps the model out from under us. Only fall back
+    to /v1/models for a server Virtual Worker didn't start, where we have no path.
+    """
+    path = _state.get("path")
+    if path:
+        return path
     try:
         async with httpx.AsyncClient(timeout=2) as client:
             r = await client.get(f"{_base_url(port)}/v1/models")
@@ -183,6 +204,21 @@ async def _active_model_id(port: int | None = None) -> str | None:
         return data[0].get("id") if data else None
     except Exception:
         return None
+
+
+async def _probe(port: int | None = None) -> tuple[bool, str | None]:
+    """One GET /v1/models → (reachable, active model id). status() needs both
+    facts; doing it in a single round-trip halves the request rate the Chat page
+    polls at (it used to call _healthy() and _active_model_id() back to back)."""
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            r = await client.get(f"{_base_url(port)}/v1/models")
+        if r.status_code != 200:
+            return False, None
+        data = r.json().get("data") or []
+        return True, (data[0].get("id") if data else None)
+    except Exception:
+        return False, None
 
 
 def _start_verify(path: str, port: int) -> None:
@@ -217,8 +253,8 @@ async def _run_verify(path: str, port: int) -> None:
                    "error": "timed out waiting for the model server to come up"}
         return
 
-    model_id = await _active_model_id(port) or path
-    payload = {"model": model_id, "messages": [{"role": "user", "content": "hi"}],
+    # Probe the model we just started — never one discovered from /v1/models.
+    payload = {"model": path, "messages": [{"role": "user", "content": "hi"}],
                "max_tokens": 1, "temperature": 0, "stream": False}
     try:
         timeout = httpx.Timeout(connect=10, read=300, write=30, pool=10)
@@ -286,14 +322,16 @@ def _mlx_args(path: str, port: int, console: str, module: str, adapter: str | No
     return args
 
 
-def _spawn(path: str, ctx: int, ngl: int, port: int, backend: str, adapter: str | None = None) -> int:
+def _spawn(path: str, ctx: int, ngl: int, port: int, backend: str, adapter: str | None = None,
+           mtp: bool = False, mtp_n_max: int = _MTP_N_MAX_DEFAULT) -> int:
     APP_HOME.mkdir(parents=True, exist_ok=True)
     if backend == "mlx-vlm":  # vision/audio models — MLX manages ctx/GPU itself
-        args = _mlx_args(path, port, MLX_VLM_BIN, "mlx_vlm.server", adapter)
+        args = _mlx_args(path, port, config.mlx_vlm_bin(), "mlx_vlm.server", adapter)
     elif backend == "mlx":
-        args = _mlx_args(path, port, MLX_BIN, "mlx_lm.server", adapter)
+        args = _mlx_args(path, port, config.mlx_bin(), "mlx_lm.server", adapter)
     else:
-        binary = shutil.which(LLAMA_BIN) or LLAMA_BIN
+        llama = config.llama_bin()
+        binary = shutil.which(llama) or llama
         args = [
             binary,
             "--model", path,
@@ -302,6 +340,13 @@ def _spawn(path: str, ctx: int, ngl: int, port: int, backend: str, adapter: str 
             "--ctx-size", str(ctx), "--n-gpu-layers", str(ngl),
             "--jinja",
         ]
+        if mtp:
+            # Self-speculate off the model's own embedded MTP head: the draft
+            # reuses the loaded weights (no second model in memory), and output
+            # is identical to non-MTP decoding — just faster.
+            n = max(_MTP_N_MAX_MIN, min(_MTP_N_MAX_MAX, int(mtp_n_max)))
+            args += ["--model-draft", path, "--spec-type", "draft-mtp",
+                     "--spec-draft-n-max", str(n)]
     logf = open(_LOG_FILE, "ab")
     logf.write(f"\n=== starting {path} @ {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n".encode())
     logf.flush()
@@ -365,19 +410,25 @@ async def _free_port(port: int) -> bool:
 
 
 async def start(path: str, ctx: int | None = None, ngl: int | None = None,
-                force: bool = False, adapter: str | None = None) -> dict:
+                force: bool = False, adapter: str | None = None,
+                mtp: bool = False, mtp_n_max: int = _MTP_N_MAX_DEFAULT) -> dict:
     """Switch the active model: stop the current server, start one on `path`.
     Returns immediately with state 'loading'; poll status() for health.
     ``force=True`` takes over the port from an existing llama-server.
     ``adapter`` serves a LoRA adapter alongside the base (fine-tuned VLMs/LLMs
-    that aren't fused into a standalone model)."""
+    that aren't fused into a standalone model).
+    ``mtp`` enables llama.cpp self-speculative decoding off the model's embedded
+    MTP head (llama.cpp GGUF only; ignored for MLX); ``mtp_n_max`` is the draft
+    depth."""
     p = Path(path)
     backend = _backend_for(path)
+    mtp = bool(mtp) and backend == "llamacpp"  # MTP is a llama.cpp feature only
     if backend == "llamacpp":
         if not p.is_file() or p.suffix.lower() != ".gguf":
             raise FileNotFoundError(f"not a GGUF file on disk: {path}")
-        if not (shutil.which(LLAMA_BIN) or os.path.exists(LLAMA_BIN)):
-            raise RuntimeError(f"{LLAMA_BIN} not found — install llama.cpp (brew install llama.cpp)")
+        llama = config.llama_bin()
+        if not (shutil.which(llama) or os.path.exists(llama)):
+            raise RuntimeError(f"{llama} not found — install llama.cpp (brew install llama.cpp)")
     elif backend == "mlx-vlm":  # vision/audio MLX model
         if not p.exists():
             raise FileNotFoundError(f"MLX model not found on disk: {path}")
@@ -404,11 +455,12 @@ async def start(path: str, ctx: int | None = None, ngl: int | None = None,
 
     ctx = ctx or LLAMA_CTX
     ngl = ngl if ngl is not None else LLAMA_NGL
-    pid = _spawn(str(p), ctx, ngl, _state["port"], backend, adapter)
+    pid = _spawn(str(p), ctx, ngl, _state["port"], backend, adapter, mtp, mtp_n_max)
     _state.update({"pid": pid, "path": str(p), "ctx": ctx, "ngl": ngl, "backend": backend,
-                   "adapter": adapter, "started_at": time.time(), "managed": True})
+                   "adapter": adapter, "mtp": mtp, "mtpNMax": int(mtp_n_max),
+                   "started_at": time.time(), "managed": True})
     _save_state()
-    _save_pref(str(p), ctx, ngl, backend, adapter)  # remember this choice across restarts
+    _save_pref(str(p), ctx, ngl, backend, adapter, mtp, mtp_n_max)  # remember across restarts
     _invalidate_model_cache()
     _start_verify(str(p), _state["port"])  # confirm it can actually generate
     logger.info("started %s pid=%s model=%s", backend, pid, p.name)
@@ -418,7 +470,8 @@ async def start(path: str, ctx: int | None = None, ngl: int | None = None,
 async def status() -> dict:
     pid = _state.get("pid")
     alive = _pid_alive(pid)
-    reachable = await _healthy() if alive else False
+    # One /v1/models round-trip gives both reachability and the active model id.
+    reachable, probed_id = (await _probe()) if alive else (False, None)
     vstate = _verify.get("state")
 
     # A model is only "ready" once it has actually generated. While the probe runs
@@ -439,7 +492,7 @@ async def status() -> dict:
     healthy = reachable and not failed
     loading = alive and not reachable and not failed
 
-    active_id = await _active_model_id() if reachable else None
+    active_id = probed_id if reachable else None
     # keep the failed model's path for display even after we tore the server down
     path = _state.get("path") or (_verify.get("path") if failed else None)
     backend = _state.get("backend") or (_backend_for(path) if path else None)
@@ -458,8 +511,10 @@ async def status() -> dict:
         "quant": _quant_of(path),
         "ctx": _state.get("ctx"),
         "ngl": _state.get("ngl"),
-        "binAvailable": bool(shutil.which(LLAMA_BIN)),  # back-compat (llama.cpp)
-        "binLlamacpp": bool(shutil.which(LLAMA_BIN)),
+        "mtp": bool(_state.get("mtp")),
+        "mtpNMax": _state.get("mtpNMax", _MTP_N_MAX_DEFAULT),
+        "binAvailable": bool(shutil.which(config.llama_bin())),  # back-compat (llama.cpp)
+        "binLlamacpp": bool(shutil.which(config.llama_bin())),
         "binMlx": _mlx_lm_available(),
         "binMlxVlm": _mlx_vlm_available(),
         "error": error,
@@ -491,7 +546,9 @@ async def adopt_or_autostart() -> dict:
     if pref and Path(pref.get("path", "")).exists():
         try:
             return await start(pref["path"], ctx=pref.get("ctx"), ngl=pref.get("ngl"),
-                               adapter=pref.get("adapter"))
+                               adapter=pref.get("adapter"),
+                               mtp=pref.get("mtp", False),
+                               mtp_n_max=pref.get("mtpNMax", _MTP_N_MAX_DEFAULT))
         except Exception as exc:
             logger.warning("reloading persisted model (%s) failed: %s", pref.get("path"), exc)
             return await status()

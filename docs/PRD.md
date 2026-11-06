@@ -1,6 +1,6 @@
 # PRD — Virtual Worker
 
-_Status: Draft v0.2 · Last updated: 2026-11-04 · License: Apache-2.0 · Audience: open-source contributors_
+_Status: Draft v0.3 · Last updated: 2026-11-07 · License: Apache-2.0 · Audience: open-source contributors_
 
 > **Virtual Worker** is an open-source, local-first platform for running autonomous AI
 > workers on your own machine. A worker is more than a chatbot: it has a job title, a
@@ -235,6 +235,7 @@ The product is built around five ideas:
   launch.
 - FR-B4. Delegation: a worker can assign a task to another worker's board; when the task
   closes, the result flows back to the assigning worker in the originating conversation.
+  _Implemented 2026-11-07 (`agent/inbox.py`; chat-channel origins flow back through the channel manager)._
 
 ### 8.5 Schedules and triggers
 
@@ -308,6 +309,7 @@ The product is built around five ideas:
   local embedding model; vectors in SQLite; cited retrieval via a `kb_search` tool.
 - FR-K2. Knowledge wikis: a folder of markdown pages the worker can search, read and write,
   portable as a plain directory.
+  _Implemented 2026-11-07 (`agent/wiki.py`, `storage/wiki_store.py`)._
 
 ### 8.10 Templates
 
@@ -320,6 +322,7 @@ The product is built around five ideas:
   deploy (missing model, skill, MCP server).
 - FR-T5. Optional git-backed template registries for teams: versioned templates, provenance
   stamped on deployed workers, one-click update with a diff.
+  _Implemented 2026-11-07 (`routes/registries.py`, `storage/registry_store.py`, `registry-scaffold/`)._
 
 ### 8.11 Observability
 
@@ -344,6 +347,7 @@ The product is built around five ideas:
   templates, settings, channel sessions), scheduled local backups, machine migration.
 - FR-X4. Packaging: a dev launcher, a service mode (detached, auto-restart, built UI), and
   a desktop app build (frozen backend plus UI) as a later milestone.
+  _Desktop build scaffold present under `desktop/` (2026-11-07); release pipeline not yet wired._
 
 ## 9. UX and surfaces
 
@@ -461,7 +465,7 @@ external channel; capture and background loops are best-effort and never crash t
 | **M2 Board, schedules, delivery** | Board, activity, duty worker, cron and one-time schedules, file and webhook triggers, delivery targets (webhook, notification, email) and audit | A worker on duty works a board and delivers a result on schedule |
 | **M3 WhatsApp channel** — **implemented 2026-11-04** | Channel plugin interface, WhatsApp linked-device transport with QR pairing, policies, bindings, per-conversation sessions, media, outbound send tool, Cloud API transport | Message a worker from a phone; reply in the same chat; allow-list enforced; no public host |
 | **M4 Templates and knowledge** | Template format, gallery, deploy, export/import, knowledge bases, wikis, backup/restore | Deploy a Customer Support Rep that answers from uploaded docs in one sitting |
-| **M5 More channels and teams** — Telegram shipped 2026-11-04 | Telegram, Discord, Slack adapters; delegation and inbox flow-back; custom tool builder; analytics; BYOK providers and gateway | Two workers collaborate on a delegated task from a group chat |
+| **M5 More channels and teams** — Telegram shipped 2026-11-04; BYOK providers, gateway, delegation flow-back and custom tools landed 2026-11-07 | Telegram, Discord, Slack adapters; delegation and inbox flow-back; custom tool builder; analytics; BYOK providers and gateway | Two workers collaborate on a delegated task from a group chat |
 | **M6 Packaging and trust** — service mode shipped 2026-11-04 (`./vw`) | Service mode, desktop build, team mode with accounts and audit, security hardening pass | Runs unattended for a week; passes the security checklist |
 | **Later** | Fine-tuning from feedback, evaluation suites, voice, browser control and flow recorder, case management for support teams, hosted template index | |
 

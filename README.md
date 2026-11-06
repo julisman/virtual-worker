@@ -45,6 +45,22 @@ MCP server, a remote upstream, or a connected chat channel.
 - **Models**: discover and download models from Hugging Face, see what fits your
   machine, activate one. Managed llama.cpp (GGUF) and MLX (Apple Silicon) engines, or
   any OpenAI-compatible upstream (Ollama, vLLM, LM Studio).
+- **External providers (bring your own key)**: any agent can run on OpenAI, Anthropic,
+  DeepSeek, OpenRouter or a custom OpenAI-compatible gateway instead of the local model,
+  with prompt caching, reasoning-effort control and per-call cost tracking. Keys are
+  stored once, write-only.
+- **Browser tools**: self-hosted web search (SearXNG), headless page reading, and an
+  interactive browser the agent can drive (open, click, type, screenshot) with a
+  persistent profile so logins stick.
+- **Knowledge wikis**: an agent-maintained wiki of cross-linked markdown pages, plus
+  linked repository wikis, searchable with cited answers.
+- **Context compression**: large tool results are crushed to what matters, with the
+  original kept locally and retrievable on demand, so local models stay fast.
+- **Delegation with flow-back**: an agent can assign work to a teammate's board; when
+  it finishes, the assigning agent is woken in the originating chat with the result.
+- **Template registries**: host team templates in a git repository, deploy with
+  provenance, and update deployed agents with a diff.
+- **Desktop packaging**: an Electron shell with a frozen backend (see `desktop/`).
 - **Multi-protocol gateway**: use your local model from coding agents over OpenAI,
   Anthropic Messages, OpenAI Responses and Gemini shaped endpoints, protected by minted
   API tokens.

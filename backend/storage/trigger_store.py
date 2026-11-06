@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from storage import _sqlite
 import threading
 import uuid
 from datetime import datetime
@@ -42,7 +43,7 @@ def _now_iso() -> str:
 def _conn() -> sqlite3.Connection:
     p = db_path()
     ensure_dir(p.parent)
-    conn = sqlite3.connect(str(p))
+    conn = _sqlite.connect(str(p))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
@@ -69,6 +70,7 @@ def _conn() -> sqlite3.Connection:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_triggers_agent ON triggers(agent_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_triggers_hook ON triggers(hook_token)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_triggers_enabled ON triggers(enabled, type)")
+    conn.mark_initialized()
     return conn
 
 

@@ -11,7 +11,7 @@ export default defineConfig({
   server: {
     port: Number(process.env.FRONTEND_PORT || 5173),
     proxy: {
-      // Forward API + gateway calls to the dev backend (dev.sh sets BACKEND_PORT).
+      // Forward API + inference calls to the backend during dev.
       "/api": `http://127.0.0.1:${process.env.BACKEND_PORT || 8889}`,
       "/v1": `http://127.0.0.1:${process.env.BACKEND_PORT || 8889}`,
       "/v1beta": `http://127.0.0.1:${process.env.BACKEND_PORT || 8889}`,

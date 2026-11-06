@@ -4,6 +4,7 @@
 
   GET    /api/debug/sessions             -> { summary, sessions }
   GET    /api/debug/sessions/{id}        -> { runs, totalEntries, summary }
+  GET    /api/debug/runs/{run_id}        -> { sessionId, run }   (deep-link a single run)
   DELETE /api/debug/sessions             -> clear all
   DELETE /api/debug/sessions/{id}        -> clear one
 
@@ -45,6 +46,20 @@ async def get_debug_session(session_id: str):
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("debug: get session failed")
         raise HTTPException(status_code=500, detail="Failed to load debug session") from exc
+
+
+@router.get("/runs/{run_id}")
+async def get_debug_run(run_id: str):
+    try:
+        data = debug_db.get_run(run_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="No such run")
+        return data
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("debug: get run failed")
+        raise HTTPException(status_code=500, detail="Failed to load debug run") from exc
 
 
 @router.delete("/sessions")

@@ -1,0 +1,16 @@
+{
+  "id": "implementer",
+  "description": "Implement a scoped code change and verify it.",
+  "default_complexity": "standard",
+  "sandbox": "workspace-write",
+  "instructions": [
+    "Implement the smallest complete solution that addresses the root cause.",
+    "Respect existing architecture and avoid unrelated changes.",
+    "Run focused verification before broader checks."
+  ],
+  "complexity_profiles": {
+    "simple": {"model_policy": "economy", "reasoning_effort": "medium"},
+    "standard": {"model_policy": "economy", "reasoning_effort": "high"},
+    "complex": {"model_policy": "capable", "reasoning_effort": "high"}
+  }
+}

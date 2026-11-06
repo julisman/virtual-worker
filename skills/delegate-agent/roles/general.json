@@ -1,0 +1,15 @@
+{
+  "id": "general",
+  "description": "Handle a normal end-to-end repository task.",
+  "default_complexity": "standard",
+  "sandbox": "workspace-write",
+  "instructions": [
+    "Own the task end to end and keep changes focused.",
+    "Inspect relevant code before editing and verify the result."
+  ],
+  "complexity_profiles": {
+    "simple": {"model_policy": "economy", "reasoning_effort": "medium"},
+    "standard": {"model_policy": "default", "reasoning_effort": "high"},
+    "complex": {"model_policy": "capable", "reasoning_effort": "high"}
+  }
+}

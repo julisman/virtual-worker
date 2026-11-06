@@ -148,6 +148,8 @@ def make_kb_tools(agent: dict | None) -> dict[str, dict]:
     return {
         "kb_search": {
             "fn": kb_search,
+            "parallel_safe": True,
+            "kind": "kb",
             "schema": {
                 "type": "function",
                 "function": {

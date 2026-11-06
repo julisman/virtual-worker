@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import sqlite3
+from storage import _sqlite
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -25,7 +26,7 @@ _last_used_flush: dict[str, float] = {}     # throttle last_used writes
 
 
 def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path())
+    conn = _sqlite.connect(db_path())
     conn.row_factory = sqlite3.Row
     conn.execute("""
         CREATE TABLE IF NOT EXISTS api_tokens (
@@ -39,6 +40,7 @@ def _conn() -> sqlite3.Connection:
             revoked      INTEGER NOT NULL DEFAULT 0
         )
     """)
+    conn.mark_initialized()
     return conn
 
 

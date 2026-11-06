@@ -1,0 +1,17 @@
+{
+  "economy": {
+    "description": "Prefer the fast Haiku alias for routine work.",
+    "preferred_models": ["haiku"],
+    "fallback": "default-alias"
+  },
+  "default": {
+    "description": "Use the balanced Sonnet alias.",
+    "preferred_models": ["sonnet"],
+    "fallback": "default-alias"
+  },
+  "capable": {
+    "description": "Prefer the Opus alias for difficult work, then Sonnet.",
+    "preferred_models": ["opus", "sonnet"],
+    "fallback": "default-alias"
+  }
+}

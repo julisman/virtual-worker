@@ -13,6 +13,7 @@ token-guarded — it only does anything when its trigger is enabled."""
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from agent.triggers import triggers
@@ -113,4 +114,7 @@ async def webhook(token: str, request: Request):
         raise HTTPException(404, "no such webhook")
     if not t["enabled"]:
         raise HTTPException(403, "trigger is disabled")
-    return {"ok": True, "triggerId": t["id"], "lastStatus": t["lastStatus"]}
+    # The run was accepted and fires in the background — don't hold the caller
+    # open for the (possibly multi-minute) agent run.
+    return JSONResponse({"ok": True, "accepted": True, "triggerId": t["id"]},
+                        status_code=202)

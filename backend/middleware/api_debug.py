@@ -21,6 +21,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from gateway.pricing import estimate_cost as _cost
 from storage import debug_db
 
 logger = logging.getLogger(__name__)
@@ -37,17 +38,6 @@ _CAPTURE_SUFFIXES = (
     ":streamGenerateContent",  # Gemini streaming
 )
 _MAX_CAPTURE_BYTES = 2 * 1024 * 1024  # cap teed body at 2 MB
-
-# Minimal price table (USD per 1M tokens). Local inference is free; extend as
-# external providers are wired in. Unknown models -> cost 0.
-_PRICE_PER_M = {
-    # model substring : (input, output)
-    "gpt-4o": (2.5, 10.0),
-    "gpt-4o-mini": (0.15, 0.6),
-    "claude-sonnet": (3.0, 15.0),
-    "claude-opus": (15.0, 75.0),
-    "claude-haiku": (0.8, 4.0),
-}
 
 
 def _capture_enabled() -> bool:
@@ -172,16 +162,6 @@ def _provider_of(path: str, model: str | None) -> str:
     if m.startswith("gpt") or "openai" in m:
         return "openai"
     return "local"
-
-
-def _cost(model: str | None, inp: int, out: int) -> float:
-    if not model:
-        return 0.0
-    m = model.lower()
-    for key, (pi, po) in _PRICE_PER_M.items():
-        if key in m:
-            return round((inp / 1_000_000) * pi + (out / 1_000_000) * po, 6)
-    return 0.0
 
 
 def _as_text(content) -> str:
@@ -579,7 +559,9 @@ def _capture_and_persist(session_id, method, path, status, duration_ms,
             "cache_read": usage["cacheRead"],
             "cache_write": usage["cacheWrite"],
             "total_tokens": usage["totalTokens"],
-            "cost": cost,
+            # Cost is computed authoritatively inside ``debug_db.insert_run`` from
+            # the shared price table (the single source of truth) — never supplied
+            # by callers. The per-entry ``cost`` above is kept for the trace view.
             "tool_calls": len(tool_calls),
             "first_user_text": _truncate(last_user, 280),
             "last_assistant_text": _truncate(parsed.get("text"), 280),

@@ -18,11 +18,15 @@ virtual-worker/
 │   ├── config.py       # env + paths (VW_HOME, upstream, model map, …)
 │   ├── routes/         # one module per API surface (agents, hub, chat, …)
 │   ├── storage/        # SQLite-backed stores (app.db) + the settings file
-│   ├── agent/          # the agent harness — compose(), loop.run(), tools, worker, …
+│   ├── agent/          # the agent harness — runner.stream_run() → compose() → loop.run(); tools, worker,
+│   │                   #   scheduler, triggers, inbox (flow-back), crusher (context compression), wiki,
+│   │                   #   browser_control, skill_factory, team, vision_helper, doc_tools, …
 │   ├── channels/       # chat-channel plugins: base contract, manager, whatsapp/ (+ Node bridge), telegram
 │   ├── vw_cli.py       # `./vw` service mode: detached supervisor, auto-restart, built UI
 │   ├── runtime/        # managed model server + engine management
-│   ├── gateway/        # protocol translators (Anthropic / Responses / Gemini)
+│   ├── gateway/        # protocol translators (Anthropic / Responses / Gemini) + providers.py /
+│   │                   #   egress.py / pricing.py (BYOK external models normalized to one chunk shape)
+│   ├── connectors/     # stub (portal connectors are not part of this build)
 │   ├── middleware/     # api_debug (trace capture) + team_auth (optional auth)
 │   └── tests/          # pytest suite (test_*.py)
 ├── frontend/           # React + Vite + TypeScript + Tailwind v4
@@ -32,7 +36,9 @@ virtual-worker/
 │       ├── lib/        # api.ts (apiJson/apiPost/apiFetch), auth.tsx
 │       ├── assets/     # icon.svg, logo.svg
 │       └── index.css   # the @theme design tokens (palette + fonts)
-├── docs/               # PRD.md (product plan)
+├── docs/               # PRD.md (product plan), ARCHITECTURE.md, INSTALL.md
+├── desktop/            # Electron shell + PyInstaller spec for the packaged app
+├── registry-scaffold/  # starter repo layout for a git-backed template registry
 ├── samples/            # example skill packs
 ├── dev.sh              # bootstrap-on-first-run + start backend + frontend (hot reload)
 ├── vw                  # service control: start | stop | restart | status | logs
@@ -103,6 +109,11 @@ inbound (browser / coding agents / later: chat channels)
   allow-list), `chat` (`<accountId>:<conversation>`), `email` (SMTP target with an
   `allowTo` allow-list; password write-only under `deliveryTargetSecrets`). Every send is
   audited in `deliveries`.
+- **One run entry point.** Every surface (chat route, worker, scheduler, triggers,
+  inbox flow-back, chat channels) calls `agent/runner.py:stream_run()`, which resolves
+  the model target (local or a BYOK provider via `gateway/providers.py:resolve_target`),
+  composes the system prompt + tool registry, wires MCP servers, and drives `loop.run`
+  with the agent's guardrail knobs. `execute_run()` collects `(text, error, run_id)`.
 - **Agent tools** are assembled per run in `agent/compose.py` as a registry
   `{name: {"schema": <openai fn schema>, "fn": <async callable>}}`, then passed to
   `agent/loop.py:run()`. Per-agent tool factories follow one pattern (see

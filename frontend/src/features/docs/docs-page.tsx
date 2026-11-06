@@ -62,8 +62,8 @@ const CATEGORIES: Category[] = [
   {
     title: "Get Started",
     sections: [
-      { id: "overview", title: "What is Virtual Worker", icon: BookIcon, keywords: "virtual worker intro overview local llm offline serve debug agents" },
-      { id: "quickstart", title: "Quick Start", icon: RocketIcon, keywords: "run dev.sh vw start stop status logs service daemon setup install bootstrap uv node homebrew llama.cpp first model activate ports 5173 8888 8889 8080 8081" },
+      { id: "overview", title: "What is Virtual Worker", icon: BookIcon, keywords: "virtual worker supply chain intro overview local llm studio offline serve debug finetune monochrome" },
+      { id: "quickstart", title: "Quick Start", icon: RocketIcon, keywords: "run dev.sh setup install bootstrap uv node homebrew llama.cpp first model activate ports 5173 8888 8080" },
       { id: "architecture", title: "How It Works", icon: ArchIcon, keywords: "architecture gateway backend fastapi frontend react upstream model server data app.db managed mode" },
     ],
   },
@@ -72,10 +72,12 @@ const CATEGORIES: Category[] = [
     sections: [
       { id: "chat", title: "Chat", icon: ChatIcon, keywords: "playground streaming model picker system prompt temperature attachments files images sessions history search web tool loop" },
       { id: "agents", title: "Agents", icon: AgentsIcon, keywords: "persona system prompt model create edit delete chat with agent roster sidebar intern worker" },
-      { id: "skills", title: "Skills", icon: SkillsIcon, keywords: "skillpack skill.md procedural knowledge enable disable load agentskills" },
+      { id: "providers", title: "External Models", icon: GatewayIcon, keywords: "external provider byok subscription deepseek openai chatgpt anthropic claude api key oauth sign in codex paid remote model per-agent gpt-5 claude-sonnet" },
+      { id: "skills", title: "Skills", icon: SkillsIcon, keywords: "skillpack skill.md procedural knowledge enable disable load agentskills author create factory meta skill-creator" },
       { id: "mcp", title: "MCP Servers", icon: McpIcon, keywords: "model context protocol tools servers stdio sse connect external tools" },
       { id: "memory", title: "Memory", icon: MemoryIcon, keywords: "agent memory remember facts persistent recall context" },
-      { id: "schedule", title: "Schedules", icon: ClockIcon, keywords: "cron scheduled task timer recurring daily weekly hourly one-time at 2pm 5pm reminder summary autonomous fire run now next run deliver email smtp webhook chat channel" },
+      { id: "wiki", title: "Knowledge Wiki", icon: BookIcon, keywords: "wiki okf open knowledge format markdown pages ingest query lint orphans broken links stale graph export import compounding knowledge base karpathy wiki_search wiki_write wiki_read wiki_lint" },
+      { id: "schedule", title: "Schedules", icon: ClockIcon, keywords: "cron scheduled task timer recurring daily weekly hourly one-time at 2pm 5pm reminder summary autonomous fire run now next run" },
     ],
   },
   {
@@ -95,6 +97,7 @@ const CATEGORIES: Category[] = [
     title: "Connect & Serve",
     sections: [
       { id: "connect", title: "Connect Agents", icon: ConnectIcon, keywords: "claude code codex antigravity gemini anthropic messages responses generatecontent gateway endpoints copy paste setup offline" },
+      { id: "channel", title: "chat channel", icon: ConnectIcon, keywords: "channel chat bot message dm group websocket relay webhook event callback app_id app_secret signing secret laptop no public host dial out reply integration" },
       { id: "gateway", title: "Gateway & Proxy", icon: GatewayIcon, keywords: "openai compatible v1 chat completions embeddings models translate protocol url path streaming tool calls model map default model upstream" },
       { id: "tokens", title: "API Tokens", icon: TokenIcon, keywords: "sk-vw token key auth x-api-key bearer expire ttl revoke hash gateway key" },
     ],
@@ -204,13 +207,12 @@ const CONTENT: Record<string, React.ReactNode> = {
   // ─── Get Started ──────────────────────────────────────────────────────────
   overview: (
     <>
-      <P><Term>Virtual Worker</Term> is a local-first platform for running autonomous AI workers on your own machine: agents with a persona, tools, skills, memory, a task board, and schedules, served by a local model by default. It runs a single React app on top of a FastAPI backend that acts as an OpenAI-compatible gateway in front of any model server (llama.cpp, MLX, vLLM, or a remote provider).</P>
+      <P><Term>Virtual Worker</Term> is a local-first platform for running autonomous AI workers on your own machine: agents with a persona, tools, skills, memory, a task board and schedules, served by a local model by default and reachable from the chat apps you already use. It runs a single React app on top of a FastAPI backend that acts as an OpenAI-compatible gateway in front of any model server (llama.cpp, MLX, vLLM, or a remote provider).</P>
       <P>Everything is local by default — your chats, agents, memory, downloaded models, and API traces all stay on your machine. Nothing leaves it unless you explicitly use web search, a remote MCP server, or a remote upstream.</P>
       <P>Use the left sidebar to move between the workspaces:</P>
       <Bullets items={[
         <><Term>Chat</Term> — talk to the active model, as a plain assistant or as one of your agents.</>,
         <><Term>Agents</Term> — build personas with their own tools, skills, memory, and (optionally) an autonomous task board. Includes the <Term>Skills</Term> and <Term>MCP</Term> sub-tabs.</>,
-        <><Term>Channels</Term> — connect WhatsApp so people can message an agent from their phone; policies, pairing, and per-chat routing.</>,
         <><Term>Models</Term> — discover, download, and activate local models from Hugging Face.</>,
         <><Term>Connect</Term> — point coding agents (Claude Code, Codex, Gemini) at your local model.</>,
         <><Term>Debug</Term> — inspect every LLM API call: request, response, tokens, cost, latency, tool calls.</>,
@@ -222,15 +224,10 @@ const CONTENT: Record<string, React.ReactNode> = {
   quickstart: (
     <>
       <P>From a fresh clone, the launcher bootstraps everything on first run (backend virtualenv + deps, frontend deps, llama.cpp via Homebrew, and <Code>mlx-lm</Code> / <Code>mlx-vlm</Code> on Apple Silicon), then starts the backend and frontend together:</P>
-      <Pre>{`./dev.sh                      # hot-reload dev profile
+      <Pre>{`./dev.sh
 #   web   → http://localhost:5173
-#   api   → http://127.0.0.1:8889   (docs: /docs)
-#   llama → http://127.0.0.1:8081/v1   (backend-managed)
-
-./vw start                    # always-on service (built UI + API on one port)
-#   app   → http://127.0.0.1:8888   (model server on :8080)
-./vw status · ./vw logs -f · ./vw restart · ./vw stop`}</Pre>
-      <P><Term>Service mode</Term> is how you run a worker that answers on WhatsApp or Telegram all day: the backend runs detached with automatic restarts and keeps running after you close the terminal. Dev and service use different default ports so both can run at once.</P>
+#   api   → http://127.0.0.1:8888   (docs: /docs)
+#   llama → http://127.0.0.1:8080/v1   (backend-managed)`}</Pre>
       <P>Prerequisites it can't install for you — it prints the exact command if any is missing:</P>
       <Bullets items={[
         <><Term>uv</Term> (Python toolchain), <Term>Node / npm</Term>, and <Term>Homebrew</Term> (for llama.cpp).</>,
@@ -240,7 +237,7 @@ const CONTENT: Record<string, React.ReactNode> = {
       <Steps items={[
         <>Open <Term>Models</Term> → <Term>Discover</Term> and search (e.g. a small Unsloth GGUF or MLX model).</>,
         <>Pick a file that shows <Term>Fits</Term> for your device and click <Term>Download</Term> — progress shows live and resumes if interrupted.</>,
-        <>Switch to <Term>On Device</Term>, choose a context size, and click <Term>Activate</Term>.</>,
+        <>Switch to <Term>On Device</Term> and click <Term>Activate</Term>. Each model's context size defaults to the largest that <Term>likely fits your machine</Term> (up to the model's trained max) — adjust it per model from the dropdown next to <Term>Activate</Term> if you want more or less.</>,
         <>Go to <Term>Chat</Term> and start talking. The header shows the active model.</>,
       ]} />
       <Tip>Skip the managed server entirely by pointing Virtual Worker at your own: set <Code>VW_UPSTREAM_URL=http://127.0.0.1:11434</Code> (Ollama) or any OpenAI-compatible URL.</Tip>
@@ -248,16 +245,16 @@ const CONTENT: Record<string, React.ReactNode> = {
   ),
   architecture: (
     <>
-      <P>Virtual Worker is three local processes that <Code>./dev.sh</Code> starts together: the <Term>frontend</Term> (React + Vite), the <Term>backend</Term> (FastAPI on <Code>:8889</Code> in dev, <Code>:8888</Code> as a service), and an <Term>upstream model server</Term> (llama.cpp / MLX on <Code>:8081</Code> in dev, <Code>:8080</Code> as a service). In service mode (<Code>./vw start</Code>) the backend also serves the built UI, so there is one port.</P>
+      <P>Virtual Worker is three local processes that <Code>./dev.sh</Code> starts together: the <Term>frontend</Term> (React + Vite), the <Term>backend</Term> (FastAPI on <Code>:8888</Code>), and an <Term>upstream model server</Term> (llama.cpp / MLX on <Code>:8080</Code> by default).</P>
       <Pre>{`Browser (:5173)
   React app — sidebar nav + feature pages
-        │  Vite proxies /api, /v1, /v1beta → :8889 (dev)
+        │  Vite proxies /api, /v1, /v1beta → :8888
         ▼
-Backend — FastAPI (:8889 dev · :8888 service)
+Backend — FastAPI (:8888)
   ApiDebugMiddleware  ── tees a bounded copy of every LLM call → app.db
   /v1/* /v1beta/*     ── OpenAI · Anthropic · Responses · Gemini gateway
-  /api/*              ── chat, hub, runtime, agents, tokens …
-        │  VW_UPSTREAM_URL (default :8081 dev · :8080 service)
+  /api/*              ── chat, hub, runtime, agents, finetune, tokens …
+        │  VW_UPSTREAM_URL (default :8080)
         ▼
 Upstream model server — llama.cpp / MLX / vLLM / Ollama / remote API`}</Pre>
       <P><Term>Managed mode</Term> (the default) means the backend itself starts, stops, and switches the inference server when you activate a model — so there's one server at a time and it survives backend reloads. Set <Code>VW_MANAGED_LLAMA=0</Code> (or point <Code>VW_UPSTREAM_URL</Code> at your own server) to manage it yourself.</P>
@@ -280,11 +277,13 @@ Upstream model server — llama.cpp / MLX / vLLM / Ollama / remote API`}</Pre>
         <><Term>Send / Stop</Term> — Enter sends, Shift+Enter is a newline; the square button aborts a running turn.</>,
         <><Term>+ (Plus)</Term> — attach photos &amp; files, or reveal a per-chat <Term>System prompt</Term> box (appended to the agent's persona).</>,
         <><Term>Sliders</Term> — set <Term>temperature</Term> (0.0 deterministic → 2.0 very creative; default 0.7 or the agent's value).</>,
-        <><Term>🌐 Search</Term> — when on, grants <Code>web_search</Code> + <Code>web_fetch</Code> for that turn so the model can look things up; tool steps show inline.</>,
+        <><Term>🌐 Search</Term> — when on, grants <Code>browser_search</Code> + <Code>browser_fetch</Code> for that turn so the model can look things up; tool steps show inline. Search runs through a self-hosted <Term>SearXNG</Term> that Virtual Worker auto-starts (no API key) — its health shows on the Monitor page.</>,
         <><Term>as [Agent]</Term> — switch which agent (persona + tools + memory) runs the chat.</>,
+        <><Term>/ commands</Term> — type <Code>/</Code> for built-in commands and the agent's skills. <Code>/compact</Code> summarizes older turns into a short recap so the chat keeps fitting the model's window; <Code>/clear</Code> starts a fresh session (the old one stays saved).</>,
+        <><Term>Context meter</Term> — a chip by the composer shows how full the window is (<Code>~tokens / window · %</Code>), turning amber past 70% and red past 90%. Near <Term>80%</Term> Virtual Worker <Term>auto-compacts</Term> the older turns before your next send so you don't hit the limit; a summary card marks where it folded.</>,
       ]} />
       <P><Term>Attachments:</Term> images are sent as inline vision content (needs a vision-capable model); text files are inlined into your message under a <Code>----- filename -----</Code> header. Files are read in the browser — nothing is uploaded to a server.</P>
-      <P><Term>Sessions &amp; history:</Term> every turn auto-saves locally. The Chat sidebar lists past chats (newest first) — click to reopen, ✕ to delete, <Term>+ New chat</Term> to start fresh. The title comes from your first message. Below each reply you'll see response time, tokens/sec, total tokens, and which tools ran.</P>
+      <P><Term>Sessions &amp; history:</Term> every turn auto-saves locally. Use <Term>+ New chat</Term> in the sidebar to start fresh; past conversations live on each agent's <Term>Conversations</Term> tab (open the agent → Conversations → click one to reopen). The title comes from your first message. Below each reply you'll see response time, tokens/sec, total tokens, and which tools ran.</P>
       <Tip>If a conversation exceeds the model's context window, Virtual Worker automatically starts a fresh session (the old one stays saved) and keeps your last message in the box so you can resend it.</Tip>
       <P>The active model is read-only here — switch it from <Term>Models</Term>. The badge polls every few seconds and updates on its own.</P>
     </>
@@ -297,13 +296,35 @@ Upstream model server — llama.cpp / MLX / vLLM / Ollama / remote API`}</Pre>
         <><Term>Name</Term> &amp; <Term>Description</Term> — shown in the roster.</>,
         <><Term>Persona / system prompt</Term> — used verbatim as the system prompt when you chat as this agent.</>,
         <><Term>Job role</Term> (optional) — e.g. "Software Engineering Intern". Leaving it blank makes a plain assistant; setting it unlocks the <Term>task board, activity feed, and shell access</Term> (see Memory/Tasks below).</>,
-        <><Term>Temperature / top_p / top_k</Term> — sampling controls; blanks fall back to the model defaults.</>,
+        <><Term>Model</Term> — run on the local active model (default) or an external provider via BYOK / subscription. See <Term>External Models</Term> below.</>,
+        <><Term>Temperature / top_p / top_k</Term> — sampling controls; blanks fall back to the model defaults. top_k is hidden for external providers (it's local-only).</>,
+        <><Term>Tight context (faster)</Term> — caps tool outputs and trims history harder, so each turn re-reads less context. Noticeably faster on local models and MCP-heavy chats; the trade-off is less context carried per turn.</>,
         <><Term>Files</Term> — set a working folder to grant scoped file tools (<Code>read_file</Code>, <Code>write_file</Code>, <Code>edit_file</Code>, <Code>list_dir</Code>, <Code>glob</Code>, <Code>grep</Code>), confined to that folder.</>,
         <><Term>Tools / Skills / MCP servers</Term> — toggle web tools, attach skill packs, and connect MCP servers.</>,
-        <><Term>Guardrails</Term> (interns) — shell mode (auto / readonly / workspace / off), verify-finished-tasks, max steps per task, daily task cap, and extra blocked commands.</>,
+        <><Term>Browser control</Term> — the <Code>browser_open</Code> / <Code>browser_snapshot</Code> / <Code>browser_click</Code> / <Code>browser_type</Code> / <Code>browser_read</Code> tools drive a <Term>real, visible</Term> browser with a <Term>persistent profile</Term>: log into a site once in the window and that session sticks across runs, so a skill can then click and type through it. Pop the window open to sign in from the agent's page ("Open browser to log in"), or just ask the agent to <Code>browser_open</Code> a URL. Separate from the headless <Code>browser_fetch</Code>; opt-in per agent.</>,
+        <><Term>Guardrails</Term> (interns) — shell mode (auto / readonly / workspace / off), verify-finished-tasks, max steps per task, daily task cap, extra blocked commands, and an operator allow-list of commands that may run even when the deny-list would refuse them.</>,
       ]} />
+      <P><Term>Detail tabs:</Term> an agent opens to tabs for <Term>Overview</Term>, <Term>Board</Term>, <Term>Activity</Term>, <Term>Schedule</Term>, <Term>Triggers</Term>, <Term>Conversations</Term>, and <Term>Settings</Term>. <Term>Conversations</Term> lists every chat you've run as that agent (newest first) — click one to reopen it in Chat. (There's no global chat-history list in the sidebar; history lives per-agent here.)</P>
+      <P><Term>Tasks (board):</Term> each task has a <Term>title</Term>, a <Term>description</Term>, and a <Term>definition of done</Term> (the acceptance criteria). Set them in the board's <Term>+ New task</Term> form, or have an agent file them in chat with the <Code>task_create</Code> tool. When the agent works a task it must satisfy every criterion, and the <Term>Verify</Term> pass checks the result against them before the task counts as done.</P>
       <P><Term>Using an agent:</Term> open it and click <Term>Chat with this agent →</Term> (starts a fresh chat as that agent), or pick it from the <Term>as […]</Term> selector in Chat. Its persona, model, sampling, tools, skills, and memory all come along.</P>
       <P><Term>Plain chat vs. agent:</Term> plain chat uses the default Assistant with no persistent memory and basic tools; a custom agent has a distinct identity, memory that carries across sessions, optional file/shell access, skills/MCP, and — with a role — autonomous work.</P>
+    </>
+  ),
+  providers: (
+    <>
+      <P>By default every agent runs on your machine's <Term>active local model</Term> — nothing leaves the device. When you need a frontier model, an individual agent can be pointed at an external provider instead. This is the only thing that causes network egress, and it's always explicit and per-agent.</P>
+      <P>In the agent editor's <Term>Model</Term> card, pick a source:</P>
+      <Bullets items={[
+        <><Term>Local</Term> (default) — the active model from the <Term>Models</Term> tab.</>,
+        <><Term>BYOK</Term> (bring your own key) — paste a provider API key. <Term>DeepSeek</Term> is first-class (<Code>deepseek-chat</Code>, <Code>deepseek-reasoner</Code>); OpenAI and Anthropic keys work too.</>,
+        <><Term>Subscription</Term> — sign in with a paid <Term>ChatGPT</Term> plan (Plus/Pro), no API key. (Claude subscription is intentionally not offered — see below.)</>,
+      ]} />
+      <P><Term>Credentials are shared, not per-agent.</Term> A key or sign-in is stored once (in <Code>~/.virtual-worker/settings.json</Code>) and reused by every agent that selects that provider. Secrets are write-only — the UI only shows whether one is set, never the value.</P>
+      <P><Term>ChatGPT subscription</Term> — click <Term>Sign in with ChatGPT</Term>; a browser tab opens and the loopback finishes the login automatically. Calls go through the Codex backend, so use a current Codex model id (e.g. <Code>gpt-5.4</Code>).</P>
+      <P><Term>Claude — BYOK only.</Term> Use an Anthropic API key (<Code>sk-ant-…</Code> from console.anthropic.com) under <Term>BYOK</Term> with a Claude model id (e.g. <Code>claude-sonnet-4-6</Code>). Claude <Term>subscription</Term> sign-in is intentionally not offered: Anthropic's terms prohibit using a Pro/Max subscription token in third-party apps (it gets detected, rate-limited, and can put your account at risk), so Virtual Worker supports Claude only via a proper API key.</P>
+      <P><Term>BYOK</Term> — choose the provider, enter the model id, paste the key, and Save. That's it.</P>
+      <Tip>The chat header shows the agent's effective model (e.g. <Code>gpt-5.4 · ChatGPT</Code>) so you can tell at a glance which provider a reply came from. The <Term>Debug</Term> tab tags each run with its provider and model.</Tip>
+      <P>Model ids rotate (especially Codex/Claude), so the dropdown entries are just suggestions — free-text is always accepted. Provider errors (bad key, retired model, rate limit) surface verbatim in the chat.</P>
     </>
   ),
   skills: (
@@ -325,6 +346,8 @@ version: 1.0.0
 ## Instructions
 Step-by-step markdown the agent follows…`}</Pre>
       <P>Skills are stored on disk under <Code>~/.virtual-worker/skills/&lt;slug&gt;/</Code>. <Term>Enable</Term> a skill on an agent by toggling it in the agent's <Term>Skills</Term> section — only attached skills appear in that agent's catalog.</P>
+      <P><Term>Skill factory (let an agent write its own skills).</Term> Turn on <Term>Skill authoring</Term> in an agent's <Term>Guardrails</Term> and it gains <Code>create_skill</Code>, <Code>update_skill</Code>, and <Code>list_all_skills</Code> tools — so it can capture a repeatable procedure as a new <Code>SKILL.md</Code> pack at runtime, saved to your library like any upload. It's <Term>off by default</Term>: authored skills go into the shared library (they aren't auto-attached), and you review/attach them from the Agents → Skills tab. Attach the bundled <Code>skill-creator</Code> meta-skill to that agent for spec-guided authoring — it teaches the format and hands over the spec + a worked example on demand.</P>
+      <Tip>Skill authoring is self-modifying — enable it only on a trusted "author" or "librarian" agent, then attach the good results to the agents that need them.</Tip>
     </>
   ),
   mcp: (
@@ -355,6 +378,29 @@ Step-by-step markdown the agent follows…`}</Pre>
       ]} />
       <P><Term>You can edit it too:</Term> in the agent editor's <Term>Memory</Term> section, read the notes (newest first), add your own, or delete any. Notes live per-agent in <Code>app.db</Code>.</P>
       <Tip>Memory is one of Virtual Worker's pillars — pair it with a working folder and skills so an agent accumulates real context about a project over time.</Tip>
+    </>
+  ),
+
+  wiki: (
+    <>
+      <P>A <Term>Knowledge Wiki</Term> is a compounding, agent-maintained knowledge base written in the <Term>Open Knowledge Format (OKF)</Term> — plain markdown pages with YAML frontmatter, cross-linked with <Code>[[wikilinks]]</Code>, stored as real files on disk under <Code>~/.virtual-worker/wikis/</Code>. Unlike a <Term>Knowledge Base</Term> (which retrieves verbatim passages from your documents), a wiki is where an agent <Term>synthesizes</Term> what it reads into cross-referenced pages that get richer over time.</P>
+      <Steps items={[
+        <>Open the <Term>Wiki</Term> tab → <Term>+ New</Term> (or <Term>Import</Term> a <Code>.zip</Code> bundle exported earlier).</>,
+        <>Attach it to an agent: <Term>Agents → (agent) → Wiki</Term> card → toggle it on. That grants the agent the <Code>wiki_*</Code> tools.</>,
+        <>In chat, tell the agent to <Term>ingest</Term>: e.g. "read https://… and add it to your wiki." It fetches the page (<Code>browser_fetch</Code>), finds related pages, and writes/updates them.</>,
+        <>Ask it questions: "what do we know about X?" — it searches the wiki and answers, citing the pages it used.</>,
+      ]} />
+      <P>The agent maintains the wiki with these tools:</P>
+      <KV rows={[
+        [<>wiki_search</>, "Find the pages relevant to a query (ranked, with a snippet)."],
+        [<>wiki_read</>, "Read one page's full markdown (frontmatter + body)."],
+        [<>wiki_write</>, "Create or update a page — kept OKF-conformant (a type + timestamp are added if omitted) and logged."],
+        [<>wiki_list</>, "List the pages that already exist."],
+        [<>wiki_lint</>, "Health-check: orphaned pages, broken [[links]], and stale pages to repair."],
+      ]} />
+      <P><Term>In the Wiki tab</Term> you can browse pages, read the <Code>log.md</Code> history, run a test search, <Term>Lint</Term> (see orphans / broken links / stale pages), view the link <Term>Graph</Term>, and <Term>Export</Term> the whole bundle as a zip (it's just files, so it round-trips through git or any editor too).</P>
+      <P><Term>Ingest a source once:</Term> the agent reads it, folds it into pages, and links them — so the cross-references and contradictions are already there next time you ask. You can also schedule a periodic "lint your wiki and fix issues" run from the agent's <Term>Schedule</Term> tab.</P>
+      <Tip>Wiki vs. Knowledge Base: use a <Term>Knowledge Base</Term> for verbatim recall over a fixed document set; use a <Term>Wiki</Term> when you want the agent to learn and remember a topic over time. A KB can even be an ingest source for a wiki.</Tip>
     </>
   ),
 
@@ -447,13 +493,27 @@ Step-by-step markdown the agent follows…`}</Pre>
         [<>Antigravity / Gemini SDK</>, "Gemini → POST /v1beta/models/{model}:generateContent"],
       ]} />
       <P>The page shows live <Term>upstream status</Term> and the resolved model, plus a copy-paste setup card for each client. If it says the upstream isn't detected, activate a model in <Term>Models</Term> first (or start your own server).</P>
-      <P><Term>Pointing a client</Term> generally means setting its base URL to the one shown on the Connect page (<Code>http://localhost:8888</Code> for the service, <Code>:8889</Code> in dev) and a token (see API Tokens). For Claude Code that's <Code>ANTHROPIC_BASE_URL</Code>; for Codex it's a <Code>~/.codex/config.toml</Code> snippet with <Code>wire_api="responses"</Code>; for Gemini it's the SDK's <Code>base_url</Code>. Each card has a <Term>Copy</Term> button.</P>
+      <P><Term>Pointing a client</Term> generally means setting its base URL to <Code>http://localhost:8888</Code> and a token (see API Tokens). For Claude Code that's <Code>ANTHROPIC_BASE_URL</Code>; for Codex it's a <Code>~/.codex/config.toml</Code> snippet with <Code>wire_api="responses"</Code>; for Gemini it's the SDK's <Code>base_url</Code>. Each card has a <Term>Copy</Term> button.</P>
       <Tip>Map a client's vendor model id to your local model with <Code>VW_MODEL_MAP</Code> (JSON) or a single <Code>VW_DEFAULT_MODEL</Code> — so a client asking for "claude-3-5-sonnet" transparently hits your local model.</Tip>
+    </>
+  ),
+  channel: (
+    <>
+      <P>Turn any agent into a <Term>chat channel</Term>: a user DMs the bot (or @mentions it in a group), the message runs that agent, and the reply comes back in the same chat — with the agent's persona, tools, skills, MCP, and memory. Each agent is its own bot with its own credentials and connection.</P>
+      <P><Term>Why WebSocket (the default).</Term> Virtual Worker runs on your machine with no public address. A classic webhook needs chat channel to reach <Term>into</Term> your laptop at a public URL (a tunnel/port-forward). Instead Virtual Worker uses chat channel's WebSocket "relay": it dials <Term>out</Term> and holds the connection, so <Term>nothing inbound has to be reachable</Term> — no host, no tunnel, no DNS.</P>
+      <KV rows={[
+        [<>WebSocket (relay)</>, "Virtual Worker connects out to chat channel. No public host — recommended for a laptop."],
+        [<>Webhook</>, "chat channel POSTs to /api/channel/callback (SHA-256 signed). Needs a public URL."],
+      ]} />
+      <P><Term>Each agent is its own bot.</Term> Configure chat channel <Term>per agent</Term>, in the agent's editor: open <Term>Agents → (your agent)</Term> and find the <Term>chat channel</Term> card. Create a bot on the chat channel Open Platform, paste <Code>app_id</Code> / <Code>app_secret</Code> (Basic Info &amp; Credentials) and <Code>signing_secret</Code> (Event Callback), choose WebSocket, and toggle it <Term>On</Term> — <Term>no URL to paste</Term>, Virtual Worker dials chat channel automatically. When the status reads <Term>Connected</Term>, go back to chat channel's <span className="italic">Event Callback → WebSocket</span> dialog and click <Term>Re-verify</Term>. Credentials are <Term>write-only</Term> on-device. The <Term>chat channel</Term> page in the sidebar is a read-only overview of every agent's bot + live status. An optional <Term>allow-list</Term> (employee codes / email domains) limits who can message the bot.</P>
+      <P><Term>Continuity &amp; debugging:</Term> each chat channel conversation is saved as a chat session (keyed <Code>channel:&lt;id&gt;</Code>) — the agent sees prior turns for real back-and-forth, and the whole thread shows up in the agent's <Term>Conversations</Term> tab (reopenable in Chat). Every turn is also a <Term>Debug</Term> trace under the same key, and each reply links to its exact run — so you can inspect any message end-to-end.</P>
+      <P><Term>Reset a conversation:</Term> send <Code>/clear</Code> (or <Code>/reset</Code> / <Code>/new</Code>) as a message to the bot to wipe that conversation's memory and start fresh — the bot forgets the earlier turns and confirms. In a group, @mention the bot with the command. (Clearing the chat in the web UI does not affect the chat channel conversation — reset it from chat channel with <Code>/clear</Code>.)</P>
+      <Tip>Local-first: messages are handled on your machine by the selected agent; the only egress is the secure connection to chat channel itself.</Tip>
     </>
   ),
   gateway: (
     <>
-      <P>Under the Connect page is an OpenAI-compatible <Term>gateway</Term>. Anything you can do with an OpenAI client works against <Code>http://localhost:8888/v1</Code> (service) or <Code>:8889/v1</Code> (dev):</P>
+      <P>Under the Connect page is an OpenAI-compatible <Term>gateway</Term>. Anything you can do with an OpenAI client works against <Code>http://localhost:8888/v1</Code>:</P>
       <KV rows={[
         [<>/v1/chat/completions</>, "Chat — byte-for-byte proxy to the upstream (no translation)."],
         [<>/v1/completions</>, "Legacy text completions."],
@@ -492,7 +552,7 @@ export VW_DEFAULT_MODEL="local-qwen"`}</Pre>
         <><Term>Disk</Term> — usage on the volume holding the model cache; watch this, since GGUF/MLX models are large.</>,
         <><Term>Model process</Term> — the inference server's resident memory (RSS), uptime, and pid.</>,
       ]} />
-      <P><Term>Inference server</Term> shows the active model, engine, context size, port, and a health badge (Healthy / Loading / Load failed / Stopped) — with the error inline if it failed. <Term>API traffic</Term> summarizes captured calls, errors, sessions, and tokens (mirrors Debug; local models are $0).</P>
+      <P><Term>Inference server</Term> shows the active model, engine, context size, port, and a health badge (Healthy / Loading / Load failed / Stopped) — with the error inline if it failed. A <Term>Search up/down</Term> chip appears when the managed SearXNG (web search) is installed, so you can tell at a glance whether <Code>browser_search</Code> will work. <Term>API traffic</Term> summarizes captured calls, errors, sessions, and tokens (mirrors Debug; local models are $0).</P>
       <P><Term>Recent errors</Term> lists the latest failed LLM API calls with their status code and model — click one to read the full message (e.g. a 503 "Loading model", a 502 unreachable upstream, or "exceeds the available context size"). The <Term>Inference server log</Term> tails the live <Code>llama-server.log</Code> so you can watch a model load or diagnose a crash.</P>
       <Tip>If a model keeps failing to load, check the Memory and Disk gauges first — then lower the context size or pick a smaller quantization in <Term>Models</Term>.</Tip>
     </>
@@ -501,7 +561,7 @@ export VW_DEFAULT_MODEL="local-qwen"`}</Pre>
     <>
       <P><Term>Debug</Term> traces every LLM API call that passes through the gateway — local and external providers alike — so you can see exactly what was sent and returned. A middleware tees a bounded copy of each request/response without buffering the client stream, then parses it on a background thread. Capture never slows or breaks inference.</P>
       <P>The page summarizes <Term>sessions, runs, tool calls, errors, tokens, and cost</Term> at the top, with a sessions list on the left and a detail view on the right.</P>
-      <P><Term>Sessions</Term> group related calls. A chat conversation is one trail (<Code>chat:&lt;id&gt;</Code>); external agents that don't send a session id get a rolling per-client trail keyed by provider + model (e.g. <Code>anthropic:local-qwen</Code>). Filter by errors and search by session / model / provider.</P>
+      <P><Term>Sessions</Term> group related calls. A chat conversation is one trail (<Code>chat:&lt;id&gt;</Code>); external agents that don't send a session id get a rolling per-client trail keyed by provider + model (e.g. <Code>anthropic:local-qwen</Code>). Filter by errors, <Term>filter by agent</Term> (every run records which agent produced it — across chat, worker, schedules, and triggers), and search by session / model / provider. Note: only runs captured after this feature shipped carry an agent tag; older traces show under “all agents”.</P>
       <P>Expand a <Term>run</Term> to see its endpoint, duration, model, token usage, estimated cost, and a per-tool breakdown, then drill into each entry — system / user / assistant / tool calls — with thinking, arguments, results, and usage. Prices for known hosted models are built in; <Term>local models cost $0</Term>.</P>
       <Bullets items={[
         <><Term>Auto 10s</Term> refreshes the view; <Term>Refresh</Term> updates on demand.</>,
@@ -535,6 +595,15 @@ export VW_DEFAULT_MODEL="local-qwen"`}</Pre>
           <>Pick a smaller quantization — check the per-file <Term>Fits / Tight / Too large</Term> verdict in Discover.</>,
           <>Lower the <Term>Activate with</Term> context size; large contexts need more memory.</>,
           <>Some 4-bit MoE models only fail on first generation, not at startup — the message will say so.</>,
+        ]} />
+      </div>
+      <div>
+        <P><Term>Chatting on a local model feels slow</Term></P>
+        <Bullets items={[
+          <>Turn on <Term>Tight context (faster)</Term> on the agent — caps tool outputs and trims history so each turn re-reads less (biggest win for MCP-heavy chats).</>,
+          <>Use a <Term>smaller model</Term> for tool/agent work (e.g. a 3-4B), and keep a big model only for deep reasoning.</>,
+          <>Or point the agent at a fast external provider (BYOK DeepSeek/Claude, or a ChatGPT subscription) — see <Term>External Models</Term>.</>,
+          <>Spawning more agents won't help a single local model — they share one GPU and queue.</>,
         ]} />
       </div>
       <div>
@@ -607,7 +676,7 @@ export function DocsPage() {
   return (
     <div className="mx-auto max-w-6xl px-5 py-6 sm:px-8">
       {/* Brand banner */}
-      <img src={appLogo} alt="Virtual Worker"
+      <img src={appLogo} alt="Virtual Worker — Virtual Worker · Local. Private. Powerful."
         className="mb-5 h-auto w-full max-w-md" />
 
       {/* Header */}

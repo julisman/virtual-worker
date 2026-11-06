@@ -36,9 +36,12 @@ interface ModelDetail {
   repoCached: boolean; repoFit: Fit;
 }
 interface LocalModel {
-  source: "hf-cache"; backend: "llamacpp" | "mlx"; repo: string; filename: string;
+  source: "hf-cache" | "finetuned"; backend: "llamacpp" | "mlx"; repo: string; filename: string;
   path: string | null; sizeBytes: number | null; sizeGb: number | null; quant: string | null;
   multimodal?: boolean;
+  maxCtx?: number | null;          // model's trained max context (from GGUF/config)
+  recommendedCtx?: number | null;  // largest that likely fits this machine, ≤ maxCtx
+  mtpCapable?: boolean;            // GGUF has an embedded MTP head → llama.cpp can self-speculate
 }
 interface DownloadJob {
   id: string; source: string; repo: string; filename: string | null;
@@ -51,6 +54,7 @@ interface RuntimeStatus {
   backend: string | null;
   modelName: string | null; modelPath: string | null; quant: string | null;
   ctx: number | null; binAvailable: boolean; binLlamacpp: boolean; binMlx: boolean; binMlxVlm: boolean;
+  mtp?: boolean; mtpNMax?: number;
   error: string | null;
 }
 
@@ -59,13 +63,35 @@ const FORMATS = [
   { id: "mlx", label: "MLX · Apple" },
 ];
 
-const CTX_OPTIONS = [
-  { id: "8192", label: "8K ctx" },
-  { id: "16384", label: "16K ctx" },
-  { id: "32768", label: "32K ctx" },
-  { id: "65536", label: "64K ctx" },
-  { id: "131072", label: "128K ctx" },
-];
+const CTX_STEPS = [8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576];
+
+function fmtCtx(n: number): string {
+  if (n >= 1_048_576 && n % 1_048_576 === 0) return `${n / 1_048_576}M`;
+  if (n >= 1024) return `${Math.round(n / 1024)}K`;
+  return String(n);
+}
+
+// Per-model context choices: the standard steps up to the model's max, plus the
+// model's recommended (memory-safe) and true max, tagged for clarity.
+function ctxOptionsFor(m: LocalModel): { id: string; label: string }[] {
+  const max = m.maxCtx ?? null;
+  const rec = m.recommendedCtx ?? null;
+  const vals = new Set<number>();
+  for (const s of CTX_STEPS) if (!max || s <= max) vals.add(s);
+  if (rec) vals.add(rec);
+  if (max) vals.add(max);
+  if (!vals.size) vals.add(32768);
+  return [...vals].sort((a, b) => a - b).map((v) => {
+    const tags: string[] = [];
+    if (rec && v === rec) tags.push("recommended");
+    if (max && v === max) tags.push("max");
+    return { id: String(v), label: `${fmtCtx(v)} ctx${tags.length ? ` (${tags.join(", ")})` : ""}` };
+  });
+}
+
+function defaultCtxFor(m: LocalModel): number {
+  return m.recommendedCtx ?? 32768;
+}
 
 type SubTab = "discover" | "device";
 
@@ -184,6 +210,8 @@ export function HubPage() {
   // on-device state
   const [local, setLocal] = useState<LocalModel[]>([]);
   const [localLoading, setLocalLoading] = useState(false);
+  // Trainability verdict per repo, from the Train tab's source of truth.
+  const [trainMap, setTrainMap] = useState<Record<string, { trainable: boolean; reason?: string | null }>>({});
 
   // downloads
   const [jobs, setJobs] = useState<DownloadJob[]>([]);
@@ -193,7 +221,10 @@ export function HubPage() {
   // active model (managed llama runtime)
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [activating, setActivating] = useState<string | null>(null); // path being started
-  const [ctxChoice, setCtxChoice] = useState("32768");
+  // Per-model context choice; falls back to the model's recommended (memory-safe) value.
+  const [ctxByPath, setCtxByPath] = useState<Record<string, number>>({});
+  // Per-model MTP (multi-token-prediction) speculative decoding — off by default.
+  const [mtpByPath, setMtpByPath] = useState<Record<string, boolean>>({});
   const rtPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ---- capability ---- //
@@ -246,6 +277,12 @@ export function HubPage() {
     try {
       const data = await apiJson<{ models: LocalModel[] }>("/api/hub/local");
       setLocal(data.models);
+      try {
+        const bm = await apiJson<{ models: { repo: string; trainable: boolean; reason?: string | null }[] }>("/api/finetune/base-models");
+        const map: Record<string, { trainable: boolean; reason?: string | null }> = {};
+        for (const b of bm.models) map[b.repo] = { trainable: b.trainable, reason: b.reason };
+        setTrainMap(map);
+      } catch { /* finetune route optional */ }
     } catch { setLocal([]); } finally { setLocalLoading(false); }
   }, []);
 
@@ -337,10 +374,13 @@ export function HubPage() {
     return () => clearInterval(t);
   }, [runtime?.verifying, refreshRuntime]);
 
-  const activate = useCallback(async (path: string, force = false) => {
+  const activate = useCallback(async (m: LocalModel, force = false) => {
+    const path = m.path!;
+    const ctx = ctxByPath[path] ?? defaultCtxFor(m);
+    const mtp = !!(m.mtpCapable && mtpByPath[path]);
     setActivating(path);
     try {
-      await apiPost("/api/runtime/start", { path, force, ctx: Number(ctxChoice) });
+      await apiPost("/api/runtime/start", { path, force, ctx, mtp });
       // Poll until the model is actually healthy (MLX can take a while to load),
       // updating the UI each tick so it flips to Active without a manual refresh.
       for (let i = 0; i < 240; i++) {
@@ -360,13 +400,13 @@ export function HubPage() {
       const msg = e instanceof Error ? e.message : String(e);
       if (!force && /already in use/i.test(msg) &&
           confirm("Another model server is already running on the port. Stop it and switch to this model?")) {
-        return activate(path, true);
+        return activate(m, true);
       }
       alert(msg);
     } finally {
       setActivating(null);
     }
-  }, [ctxChoice]);
+  }, [ctxByPath, mtpByPath]);
 
   const stopRuntime = useCallback(async () => {
     await apiPost("/api/runtime/stop", {}).catch(() => {});
@@ -397,6 +437,7 @@ export function HubPage() {
               <span className="size-2 rounded-full bg-success" />
               Active: <span className="font-mono font-medium">{runtime.modelName}</span>
               {runtime.ctx ? <span className="text-success/70">{Math.round(runtime.ctx / 1024)}K ctx</span> : null}
+              {runtime.mtp ? <span className="text-success/70" title={`Multi-token prediction on (draft depth ${runtime.mtpNMax ?? 3})`}>· MTP</span> : null}
               {runtime.verifying ? <span className="text-success/70" title="Confirming the model can generate…">· verifying…</span> : null}
               <button onClick={stopRuntime} title="Stop" className="ml-1 text-success/70 hover:text-success">✕</button>
             </span>
@@ -456,10 +497,9 @@ export function HubPage() {
         ) : (
           <>
             <span className="ml-1 text-sm text-body">{local.length} model{local.length === 1 ? "" : "s"} on device</span>
-            <label className="ml-auto flex items-center gap-1.5 text-xs text-mute" title="Context window used when activating a model">
-              Activate with
-              <Select value={ctxChoice} onChange={setCtxChoice} options={CTX_OPTIONS} />
-            </label>
+            <span className="ml-auto text-xs text-mute" title="Each model defaults to the largest context that likely fits this machine, up to its trained max. Adjust per model before activating.">
+              Context defaults to each model's memory-safe max
+            </span>
             <button onClick={loadLocal} className="rounded-full border border-pressed bg-canvas px-3.5 py-1.5 text-sm text-body hover:bg-soft hover:text-ink">
               {localLoading ? <Spinner /> : "Refresh"}
             </button>
@@ -573,7 +613,23 @@ export function HubPage() {
                 <span className="rounded-full bg-soft px-2 py-0.5 text-[10px] text-body">
                   {m.backend === "mlx" ? "MLX" : "GGUF"}
                 </span>
+                {m.source === "finetuned" && (
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary" title="Fused output of a local fine-tune (Train tab)">
+                    fine-tuned
+                  </span>
+                )}
                 {m.multimodal && <span className="rounded-full bg-info/10 px-2 py-0.5 text-[10px] text-info">vision</span>}
+                {(() => {
+                  const v = m.backend !== "mlx"
+                    ? { trainable: false, reason: "GGUF — inference only" }
+                    : (trainMap[m.repo] ?? { trainable: !m.multimodal, reason: m.multimodal ? "multimodal" : null });
+                  return (
+                    <span
+                      title={v.trainable ? "Can be fine-tuned in the Train tab" : `Not trainable — ${v.reason ?? "unsupported"}`}
+                      className={`rounded-full px-2 py-0.5 text-[10px] ${v.trainable ? "bg-success-soft text-success" : "bg-soft text-mute"}`}
+                    >{v.trainable ? "trainable" : "inference-only"}</span>
+                  );
+                })()}
                 <span className="font-mono text-xs text-body">{fmtBytes(m.sizeBytes)}</span>
                 {/* Activate in the matching engine (llama.cpp / mlx / mlx-vlm) */}
                 {m.path && (() => {
@@ -585,12 +641,37 @@ export function HubPage() {
                   if (isActive(m)) return <span className="flex items-center gap-1 rounded-full bg-success-soft px-3 py-1 text-[11px] font-semibold text-success">● Active</span>;
                   if (activating === m.path) return <span className="rounded-full border border-pressed px-3 py-1 text-[11px] text-body"><Spinner /></span>;
                   return (
-                    <button
-                      onClick={() => activate(m.path!)}
-                      disabled={!binOk || !!activating}
-                      title={binOk ? "Load this model" : missingMsg}
-                      className="rounded-xl bg-primary px-4 py-1.5 text-[11px] font-semibold text-white shadow-[0_8px_18px_-8px_rgba(43,60,130,0.7)] hover:bg-primary-deep disabled:opacity-40 disabled:shadow-none"
-                    >Activate</button>
+                    <div className="flex items-center gap-1.5">
+                      {/* MTP self-speculative decoding — only offered for GGUFs with an
+                          embedded MTP head; faster with identical output. */}
+                      {m.backend !== "mlx" && m.mtpCapable && (
+                        <label
+                          title="Multi-token prediction: self-speculative decoding off this model's built-in MTP head — faster, identical output"
+                          className="flex cursor-pointer items-center gap-1 rounded-lg border border-pressed px-2 py-1 text-[11px] text-body select-none"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!!mtpByPath[m.path!]}
+                            onChange={(e) => setMtpByPath((p) => ({ ...p, [m.path!]: e.target.checked }))}
+                          />
+                          MTP
+                        </label>
+                      )}
+                      {/* Context window for this model — defaults to its memory-safe max */}
+                      {m.backend !== "mlx" && (
+                        <Select
+                          value={String(ctxByPath[m.path!] ?? defaultCtxFor(m))}
+                          onChange={(v) => setCtxByPath((p) => ({ ...p, [m.path!]: Number(v) }))}
+                          options={ctxOptionsFor(m)}
+                        />
+                      )}
+                      <button
+                        onClick={() => activate(m)}
+                        disabled={!binOk || !!activating}
+                        title={binOk ? "Load this model" : missingMsg}
+                        className="rounded-xl bg-primary px-4 py-1.5 text-[11px] font-semibold text-white shadow-[0_8px_18px_-8px_rgba(43,60,130,0.7)] hover:bg-primary-deep disabled:opacity-40 disabled:shadow-none"
+                      >Activate</button>
+                    </div>
                   );
                 })()}
                 {/* Delete to free disk (not while active) */}

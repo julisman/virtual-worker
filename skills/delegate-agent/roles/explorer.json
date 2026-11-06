@@ -1,0 +1,16 @@
+{
+  "id": "explorer",
+  "description": "Inspect a repository, trace behavior, and report evidence without modifying files.",
+  "default_complexity": "standard",
+  "sandbox": "read-only",
+  "instructions": [
+    "Do not modify files.",
+    "Trace relevant definitions, callers, dependencies, and history.",
+    "Report verified evidence with precise file paths and distinguish hypotheses."
+  ],
+  "complexity_profiles": {
+    "simple": {"model_policy": "economy", "reasoning_effort": "low"},
+    "standard": {"model_policy": "economy", "reasoning_effort": "medium"},
+    "complex": {"model_policy": "capable", "reasoning_effort": "high"}
+  }
+}

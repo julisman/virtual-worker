@@ -56,3 +56,24 @@ def test_job_public_shape():
     assert pub["percent"] == 25.0
     assert pub["status"] == "starting"
     assert pub["repo"] == "a/b"
+
+
+@pytest.mark.parametrize("cfg,expected_mm,expected_tg", [
+    # plain text LM: not multimodal, text-generative
+    ({"architectures": ["Qwen3ForCausalLM"]}, False, True),
+    # chat VLM (Qwen3.5, Gemma-4): declares vision but answers text
+    ({"architectures": ["Qwen3_5ForConditionalGeneration"], "vision_config": {},
+      "text_config": {}}, True, True),
+    ({"architectures": ["Gemma4ForConditionalGeneration"], "vision_config": {},
+      "audio_config": {}, "text_config": {}}, True, True),
+    # dedicated audio model (TTS/STT): multimodal, NOT text-generative
+    ({"architectures": ["KokoroForTextToSpeech"], "audio_config": {}}, True, False),
+    # image-generation model: multimodal, NOT text-generative
+    ({"architectures": ["FluxPipeline"], "vision_config": {}}, True, False),
+])
+def test_mlx_meta_text_generative(tmp_path, cfg, expected_mm, expected_tg):
+    import json
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    _quant, multimodal, text_generative = hub._mlx_meta(tmp_path)
+    assert multimodal is expected_mm
+    assert text_generative is expected_tg

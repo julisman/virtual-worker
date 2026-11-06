@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ───────────────────────────────────────────────────────────────────────────
-   Virtual Worker — brand design tokens.
+   Virtual Worker (Virtual Worker) — brand design tokens.
    Navy primary (#2B3C82) on a warm cream ground (#F4F1E8); friendly purple ant
    mascot. Display/brand type is Fredoka; UI/body is Nunito. Rounded geometry —
    16–18px cards, pill controls (rounded-full). Secondary blue/green/amber are
@@ -29,6 +29,8 @@
   --color-primary-soft: #e7eaf5;     /* selected/active soft backgrounds, accent chips */
   --color-primary-line: #c9d1ea;     /* borders on soft-accent elements         */
   --color-primary-badge: #5a6bb5;    /* the v0.1 badge text                      */
+  --color-user-bubble: #2b3c82;
+  --color-user-bubble-ink: #ffffff;
 
   /* brand — secondary accents (small touches) */
   --color-info: #3d8bd4;             /* blue — researcher, antigravity          */
@@ -54,6 +56,53 @@
   color-scheme: light;
 }
 
+/* ───────────────────────────────────────────────────────────────────────────
+   Dark mode. Overrides every @theme token from above so components that use
+   the tokens (bg-base, text-ink, border-pressed, …) re-skin automatically.
+   Applied by writing `data-theme="dark"` on <html> — see src/lib/theme.tsx.
+   The palette preserves the Virtual Worker navy brand: page ground is a deep navy, and
+   the primary itself becomes a lighter navy so it stays legible on the dark.
+   ─────────────────────────────────────────────────────────────────────────── */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Primer-inspired neutral hierarchy: near-black ground, raised charcoal
+     surfaces, and borders that separate layers without high-contrast glare. */
+  --color-ink: #e6edf3;
+  --color-canvas: #161b22;
+  --color-base: #0d1117;
+  --color-body: #b1bac4;
+  --color-mute: #7d8590;
+  --color-hairline: #30363d;
+  --color-soft: #21262d;
+  --color-softer: #010409;
+  --color-pressed: #30363d;
+  --color-line: #21262d;
+  --color-elevated: #30363d;
+
+  /* Color is reserved for actions, focus, and status—not large surfaces. */
+  --color-primary: #1f6feb;
+  --color-primary-deep: #2f81f7;
+  --color-primary-soft: #172d47;
+  --color-primary-line: #2d5177;
+  --color-primary-badge: #79c0ff;
+  --color-user-bubble: #21262d;
+  --color-user-bubble-ink: #e6edf3;
+
+  /* Muted semantic accents from the same dark-theme family. */
+  --color-info: #58a6ff;
+  --color-success: #3fb950;
+  --color-success-soft: #12261e;
+  --color-warn: #d29922;
+  --color-warn-soft: #2d220f;
+  --color-magenta: #db61a2;
+  --color-danger: #f85149;
+  --color-danger-soft: #321b1b;
+
+  --color-panel: #010409;
+  --color-panel-ink: #e6edf3;
+}
+
 html,
 body {
   margin: 0;
@@ -70,16 +119,35 @@ body {
   letter-spacing: -0.3px;
 }
 
+/* A warm amber overlay for text selection. Kept semi-transparent + hue-shifted
+   from the primary so it stays visible inside user bubbles (`bg-primary`) —
+   where a primary-colored highlight would otherwise disappear into the bubble.
+   `color: inherit` preserves the underlying text color on both grounds. */
 ::selection {
-  background: var(--color-primary);
-  color: #ffffff;
+  background: rgba(224, 137, 47, 0.42);
+  color: inherit;
+}
+:root[data-theme="dark"] ::selection {
+  background: rgba(232, 160, 95, 0.45);
+  color: inherit;
 }
 
-/* Logo gentle float — empty-chat hero. */
+/* Mascot gentle float — empty-chat & Train hero. */
 @keyframes vw-float {
   0%, 100% { transform: translateY(-7px); }
   50% { transform: translateY(7px); }
 }
 .animate-float {
   animation: vw-float 5s ease-in-out infinite;
+}
+
+/* Toast — slides down from just above its final resting spot, fades out at
+   the end. Duration is intentionally generic (350ms in) because per-toast
+   lifetime is controlled from JS; the outro is only a tail fade. */
+@keyframes vw-toast-in {
+  0%   { opacity: 0; transform: translateY(-8px) scale(0.96); }
+  100% { opacity: 1; transform: translateY(0)    scale(1); }
+}
+.vw-toast {
+  animation: vw-toast-in 220ms ease-out both;
 }

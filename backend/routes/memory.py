@@ -30,9 +30,10 @@ def _require_agent(agent_id: str) -> None:
 
 
 @router.get("/{agent_id}/memory")
-async def list_memory(agent_id: str, q: str | None = None):
+async def list_memory(agent_id: str, q: str | None = None, limit: int = 100):
     _require_agent(agent_id)
-    notes = memory_store.search(agent_id, q) if q else memory_store.list_for(agent_id)
+    limit = max(1, min(int(limit), 2000))   # bound the page the UI can pull
+    notes = memory_store.search(agent_id, q, limit=limit) if q else memory_store.list_for(agent_id, limit=limit)
     return {"memories": notes, "total": memory_store.count(agent_id)}
 
 

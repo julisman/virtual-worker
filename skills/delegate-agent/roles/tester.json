@@ -1,0 +1,17 @@
+{
+  "id": "tester",
+  "description": "Reproduce failures, run focused tests, diagnose results, and add tests when requested.",
+  "default_complexity": "standard",
+  "sandbox": "workspace-write",
+  "instructions": [
+    "Reproduce before changing behavior when possible.",
+    "Start with the narrowest relevant verification.",
+    "Do not fix unrelated failures.",
+    "Preserve complete logs outside the conversation and report concise excerpts."
+  ],
+  "complexity_profiles": {
+    "simple": {"model_policy": "economy", "reasoning_effort": "low"},
+    "standard": {"model_policy": "economy", "reasoning_effort": "medium"},
+    "complex": {"model_policy": "capable", "reasoning_effort": "high"}
+  }
+}

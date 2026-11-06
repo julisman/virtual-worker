@@ -24,11 +24,14 @@ loop, mirroring ``make_schedule_tools``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 
@@ -37,11 +40,11 @@ from storage import channel_store
 logger = logging.getLogger(__name__)
 
 # Channels shipped in this milestone. Local ones are always available; network
-# ones are opt-in (see webhook).
-CHANNELS = ("in_app", "desktop", "webhook", "chat", "email")
+# ones are opt-in (see webhook / chat / email).
+CHANNELS = ("in_app", "desktop", "webhook", "chat", "email", "obsidian")
 # Channels that address a real recipient — an explicit target is mandatory
 # (FR-3 / anti-PR-#648). Desktop is a local notification with no recipient.
-REQUIRES_TARGET = {"in_app", "webhook", "chat", "email"}
+REQUIRES_TARGET = {"in_app", "webhook", "chat", "email", "obsidian"}
 NETWORK_CHANNELS = {"webhook", "chat", "email"}
 
 MAX_PAYLOAD_BYTES = 256 * 1024   # rate/size guard (FR-14)
@@ -86,6 +89,37 @@ def _send_desktop(target: str, text: str, subject: str | None) -> str:
     return "notification posted"
 
 
+def _send_obsidian(target: str, text: str, subject: str | None) -> str:
+    """Write a markdown note into the configured Obsidian vault (``target``
+    must be the vault or a folder inside it).
+
+    Local file write, no network egress — one note per delivery, named by
+    subject (or timestamp) under a dated subfolder so a run's artifacts don't
+    collide or overwrite each other. Confined to the operator-configured
+    ``obsidianVault``: an arbitrary ``target`` path would otherwise let a run
+    write anywhere on disk, quietly bypassing the working-folder confinement
+    every other file tool enforces."""
+    from storage import settings
+    configured = (settings.get("obsidianVault") or "").strip()
+    if not configured:
+        raise RuntimeError("no Obsidian vault configured — set one in Settings "
+                           "before delivering notes (channel 'obsidian')")
+    allowed = Path(configured).expanduser().resolve(strict=False)
+    vault = Path(target).expanduser().resolve(strict=False)
+    if vault != allowed and allowed not in vault.parents:
+        raise RuntimeError(f"obsidian target must be the configured vault or a "
+                           f"folder inside it ({allowed})")
+    vault.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    day_dir = vault / now.strftime("%Y-%m-%d")
+    day_dir.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^a-z0-9]+", "-", (subject or "note").lower()).strip("-") or "note"
+    note_path = day_dir / f"{now.strftime('%H%M%S')}-{slug}.md"
+    frontmatter = f"---\ntitle: {subject or 'Note'}\ndate: {now.isoformat()}\n---\n\n"
+    note_path.write_text(frontmatter + text, encoding="utf-8")
+    return f"wrote note to {note_path}"
+
+
 async def _send_webhook(target: str, text: str, subject: str | None,
                         data, agent_id: str | None, source: str) -> str:
     """POST JSON to an allow-listed webhook URL (opt-in network egress)."""
@@ -99,7 +133,7 @@ async def _send_webhook(target: str, text: str, subject: str | None,
         raise RuntimeError(
             "webhook URL is not in any enabled webhook channel allow-list — "
             "enable it first (network egress is opt-in)")
-    if _is_private_host(url):
+    if await asyncio.to_thread(_is_private_host, url):
         raise RuntimeError("refused: webhook host is private/loopback")
     payload = {"channel": "webhook", "target": url, "text": text,
                "subject": subject, "data": data, "agent": agent_id,
@@ -164,9 +198,9 @@ async def _send_email(target: str, text: str, subject: str | None) -> str:
 
 async def _send_chat(target: str, text: str, subject: str | None,
                      agent_id: str | None, source: str) -> dict:
-    """Send through a connected chat channel. ``target`` is
-    ``<accountId>:<conversation>`` (a phone number or group id); the channel
-    manager audits the send itself, so its record is returned as-is."""
+    """Send through a connected chat channel (WhatsApp, Telegram, …). ``target``
+    is ``<accountId>:<conversation>`` (a phone number, chat id or group id); the
+    channel manager audits the send itself, so its record is returned as-is."""
     from channels.manager import manager
     if ":" not in target:
         raise RuntimeError("chat target must be '<accountId>:<phone-or-chat-id>'")
@@ -182,7 +216,8 @@ async def _send_chat(target: str, text: str, subject: str | None,
 async def deliver(channel: str, target: str, text: str, *,
                   subject: str | None = None, data=None,
                   agent_id: str | None = None, source: str = "tool",
-                  schedule_id: str | None = None) -> dict:
+                  schedule_id: str | None = None,
+                  quoted_message_id: str | None = None) -> dict:
     """Send ``text`` to one ``channel``/``target`` and record the attempt.
 
     Returns the persisted delivery record (always — even on failure, so the
@@ -220,6 +255,8 @@ async def deliver(channel: str, target: str, text: str, *,
             return await _send_chat(target, text, subject, agent_id, source)
         elif channel == "email":
             await _send_email(target, text, subject)
+        elif channel == "obsidian":
+            _send_obsidian(target, text, subject)
         return _record("sent")
     except Exception as exc:  # noqa: BLE001
         logger.warning("delivery via %s failed: %s", channel, exc)
@@ -239,12 +276,13 @@ def make_deliver_tool(agent_id: str) -> dict[str, dict]:
         target = (target or "").strip()
         text = text or ""
         if not channel:
-            return "deliver needs 'channel' — one of: in_app, desktop, webhook, chat, email."
+            return "deliver needs 'channel' — one of: in_app, desktop, webhook, chat, email, obsidian."
         if not text.strip():
             return "deliver needs 'text' — the message to send."
         if channel.lower() in REQUIRES_TARGET and not target:
             return ("deliver needs an explicit 'target' (a chat session id/alias for "
-                    "in_app, or a webhook URL). Recipients are never inferred.")
+                    "in_app, a webhook URL, or a vault folder path for obsidian). "
+                    "Recipients are never inferred.")
         rec = await deliver(channel, target, text, subject=(subject or None),
                             data=data, agent_id=agent_id, source="tool")
         if rec["status"] == "sent":
@@ -255,6 +293,7 @@ def make_deliver_tool(agent_id: str) -> dict[str, dict]:
     return {
         "deliver": {
             "fn": deliver_fn,
+            "kind": "send",
             "schema": {
                 "type": "function",
                 "function": {
@@ -262,18 +301,20 @@ def make_deliver_tool(agent_id: str) -> dict[str, dict]:
                     "description": (
                         "Send a message to a person/destination NOW via a configured channel: "
                         "'in_app' (post into a chat session — target is the session id/alias), "
-                        "'desktop' (a macOS notification — no target needed), or 'webhook' "
-                        "(HTTP POST to an allow-listed URL — target is that URL), 'chat' (a connected chat "
-                        "channel — target is '<accountId>:<phone-or-chat-id>'), or 'email' (target is an "
-                        "allow-listed address). You MUST name "
-                        "an explicit 'target'; the system never guesses or reuses a recipient. "
-                        "Use this to report a result or escalate mid-run."
+                        "'desktop' (a macOS notification — no target needed), 'webhook' "
+                        "(HTTP POST to an allow-listed URL — target is that URL), 'chat' "
+                        "(a connected chat channel such as WhatsApp or Telegram — target is "
+                        "'<accountId>:<phone-or-chat-id>'), 'email' (target is an allow-listed "
+                        "address), or 'obsidian' (write a markdown note into a local Obsidian vault "
+                        "folder — target is that folder path). You MUST name an explicit 'target' "
+                        "for every channel except desktop; the system never guesses or reuses a "
+                        "recipient. Use this to report a result, escalate mid-run, or save notes."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "channel": {"type": "string", "description": "in_app | desktop | webhook | chat | email"},
-                            "target": {"type": "string", "description": "explicit destination: chat session id/alias, a webhook URL, an email address, or for chat '<accountId>:<phone-or-chat-id>'"},
+                            "channel": {"type": "string", "description": "in_app | desktop | webhook | chat | email | obsidian"},
+                            "target": {"type": "string", "description": "explicit destination: chat session id/alias, webhook URL, '<accountId>:<phone-or-chat-id>' for chat, an email address, or an Obsidian vault folder path"},
                             "text": {"type": "string", "description": "the message body"},
                             "subject": {"type": "string", "description": "optional title/subject"},
                         },

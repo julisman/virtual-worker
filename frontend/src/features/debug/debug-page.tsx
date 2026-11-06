@@ -4,7 +4,7 @@
 // numbers, Nunito body, mono for ids/endpoints/JSON. Provider kinds carry an
 // accent dot (navy/amber/green/blue); errors are signaled in danger red.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { apiFetch as authFetch } from "@/lib/api";
 
@@ -17,23 +17,32 @@ function prettyModel(id: string | null | undefined): string {
   return id.split("/").pop() || id;
 }
 
+
 // --------------------------------------------------------------------------- //
 // Types — mirror backend/routes/debug.py response shapes
 // --------------------------------------------------------------------------- //
 
+// Every field is optional: loop-recorded entries may carry a partial dict
+// (e.g. only cacheRead/cacheWrite on remote assistant turns).
 interface Usage {
-  input: number;
-  output: number;
-  totalTokens: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
+  input?: number;
+  output?: number;
+  totalTokens?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  cost?: number;
+}
+
+interface CacheMiss {
+  rebilledTokens: number;
+  estimatedCost: number;
+  cause: string;
 }
 
 interface DebugEntry {
   id: string;
   timestamp: string;
-  type: "user" | "assistant" | "tool_call" | "tool_result" | "system" | "llm_fallback";
+  type: "user" | "assistant" | "tool_call" | "tool_result" | "system" | "llm_fallback" | "llm_retry";
   text?: string | null;
   thinking?: string | null;
   toolName?: string | null;
@@ -44,7 +53,10 @@ interface DebugEntry {
   model?: string | null;
   provider?: string | null;
   usage?: Usage | null;
+  cacheMiss?: CacheMiss;
   stopReason?: string | null;
+  truncatedChars?: number;  // chars of this result withheld from the model (0 = model saw it all)
+  crushStrategy?: string | null;  // PRD-17: json | lines | headtail | passthrough; null = compression off
 }
 
 interface DebugRun {
@@ -54,6 +66,7 @@ interface DebugRun {
   durationMs?: number | null;
   model?: string | null;
   provider?: string | null;
+  reasoningEffort?: string | null;
   endpoint?: string | null;
   stream?: boolean;
   statusCode?: number;
@@ -62,8 +75,10 @@ interface DebugRun {
   totalTokens: number;
   inputTokens?: number;
   outputTokens?: number;
+  promptTokensSum?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  cacheMiss?: CacheMiss;
   toolCalls: number;
   errorCount?: number;
   toolBreakdown?: Record<string, number>;
@@ -82,6 +97,7 @@ interface DebugSession {
   lastTime?: string;
   model?: string | null;
   provider?: string | null;
+  agentId?: string | null;
   firstMessage?: string | null;
   lastMessage?: string | null;
 }
@@ -145,6 +161,7 @@ const TYPE_COLOR: Record<string, string> = {
   tool_call: "text-info",
   tool_result: "text-body",
   llm_fallback: "text-danger",
+  llm_retry: "text-warn",
   system: "text-mute",
 };
 
@@ -169,12 +186,20 @@ const CHIP_INK = "rounded-full bg-danger px-1.5 py-0.5 font-mono text-[10px] tex
 
 function EntryNode({ entry }: { entry: DebugEntry }) {
   const [expanded, setExpanded] = useState(false);
-  const hasExpandable = !!(entry.thinking || entry.toolArgs || entry.toolResult || entry.usage);
+  // Context entries reuse the usage column for window-mode metadata (no token
+  // fields) — only treat usage as renderable when it carries actual counts.
+  const usage = entry.usage &&
+    [entry.usage.input, entry.usage.output, entry.usage.cacheRead,
+     entry.usage.cacheWrite, entry.usage.totalTokens].some((v) => typeof v === "number")
+    ? entry.usage : null;
+  const hasExpandable = !!(entry.thinking || entry.toolArgs || entry.toolResult || usage
+    || entry.type === "llm_fallback" || entry.type === "llm_retry");
   const color = entry.isError ? "text-danger" : (TYPE_COLOR[entry.type] ?? "text-body");
   const label =
     entry.type === "tool_call" ? "TOOL_CALL"
     : entry.type === "tool_result" ? (entry.isError ? "TOOL_ERROR" : "TOOL_RESULT")
     : entry.type === "llm_fallback" ? "LLM ERROR"
+    : entry.type === "llm_retry" ? "PROVIDER RETRY"
     : entry.type.toUpperCase();
 
   return (
@@ -188,16 +213,41 @@ function EntryNode({ entry }: { entry: DebugEntry }) {
           {entry.toolName && (
             <span className={CHIP}>{entry.toolName}</span>
           )}
-          {entry.usage && (
+          {!entry.text && entry.thinking && (
+            <span className={CHIP} title="This turn produced no visible text — only tool calls plus captured reasoning; expand to read it.">
+              thinking only
+            </span>
+          )}
+          {usage && (
             <span className="font-mono text-[10px] text-body">
-              {entry.usage.input.toLocaleString()}↓
-              {entry.usage.cacheRead > 0 && (
-                <span className="text-ink"> ({entry.usage.cacheRead.toLocaleString()}c)</span>
+              {(usage.input ?? 0).toLocaleString()}↓
+              {(usage.cacheRead ?? 0) > 0 && (
+                <span className="text-ink"> ({(usage.cacheRead ?? 0).toLocaleString()} cache read)</span>
               )}{" "}
-              {entry.usage.output.toLocaleString()}↑ · {formatCost(entry.usage.cost)}
+              {(usage.cacheWrite ?? 0) > 0 && (
+                <span className="text-primary"> ({(usage.cacheWrite ?? 0).toLocaleString()} cache write)</span>
+              )}{" "}
+              {(usage.output ?? 0).toLocaleString()}↑ · {formatCost(usage.cost ?? 0)}
+            </span>
+          )}
+          {entry.cacheMiss && (
+            <span className="rounded-full border border-warn/40 bg-warn-soft px-1.5 py-0.5 font-mono text-[10px] text-warn"
+              title={`Estimated ${entry.cacheMiss.rebilledTokens.toLocaleString()} tokens rebilled; ${entry.cacheMiss.cause}`}>
+              cache miss · ~{entry.cacheMiss.rebilledTokens.toLocaleString()} tok · {entry.cacheMiss.cause}
             </span>
           )}
           {entry.model && <span className="font-mono text-[10px] text-mute" title={entry.model}>{prettyModel(entry.model)}</span>}
+          {!!entry.truncatedChars && entry.truncatedChars > 0 && (
+            entry.crushStrategy && entry.crushStrategy !== "passthrough" ? (
+              <span className={CHIP_INK} title={`This result was compressed structure-aware (${entry.crushStrategy}) to save context — ${entry.truncatedChars.toLocaleString()} chars withheld, but totals/error rows/extremes were kept and the model could recover the original via retrieve_full. Full result below.`}>
+                🗜 −{entry.truncatedChars.toLocaleString()} crushed ({entry.crushStrategy})
+              </span>
+            ) : (
+              <span className={CHIP_INK} title={`The model saw a truncated copy of this result — ${entry.truncatedChars.toLocaleString()} trailing chars were cut to fit the context budget. The full result is shown below.`}>
+                ✂ {entry.truncatedChars.toLocaleString()} truncated
+              </span>
+            )
+          )}
           <span className="ml-auto font-mono text-[10px] text-mute">{formatTime(entry.timestamp)}</span>
         </div>
         {hasExpandable && <span className="mt-0.5 text-mute"><Chevron open={expanded} /></span>}
@@ -222,21 +272,43 @@ function EntryNode({ entry }: { entry: DebugEntry }) {
               ) : null}
             </Block>
           )}
+          {entry.type === "llm_retry" && (
+            <Block label="Provider blip — retried" tone="warning">
+              {entry.text && <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap font-mono text-xs leading-relaxed break-all text-warn">{entry.text}</pre>}
+            </Block>
+          )}
           {entry.toolResult && (
             <Block label={entry.isError ? "Error" : "Result"} tone={entry.isError ? "alert" : "muted"} copy={entry.toolResult}>
+              {!!entry.truncatedChars && entry.truncatedChars > 0 && (
+                entry.crushStrategy && entry.crushStrategy !== "passthrough" ? (
+                  <p className="mb-1.5 font-mono text-[10px] text-ink" title="Structure-aware compression: totals, error rows and numeric extremes were preserved, and the model could fetch the original on demand with retrieve_full.">
+                    🗜 The model saw a compressed ({entry.crushStrategy}) copy — {entry.truncatedChars.toLocaleString()} chars withheld but recoverable via retrieve_full. Full result below.
+                  </p>
+                ) : (
+                  <p className="mb-1.5 font-mono text-[10px] text-ink" title="The model was fed a shortened copy to stay within its context budget; below is the full result as captured.">
+                    ✂ The model saw only the first part of this result — {entry.truncatedChars.toLocaleString()} trailing chars were truncated to fit the context budget. Full result below.
+                  </p>
+                )
+              )}
               <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap font-mono text-xs leading-relaxed text-body">{entry.toolResult}</pre>
             </Block>
           )}
-          {entry.usage && (
+          {usage && (
             <Block label="Usage" tone="muted">
               <div className="grid grid-cols-2 gap-2 font-mono text-[10px] sm:grid-cols-4">
-                <Stat k="Input" v={entry.usage.input.toLocaleString()} />
-                <Stat k="Output" v={entry.usage.output.toLocaleString()} />
-                <Stat k="Cache Read" v={entry.usage.cacheRead.toLocaleString()} />
-                <Stat k="Cache Write" v={entry.usage.cacheWrite.toLocaleString()} />
-                <Stat k="Total" v={entry.usage.totalTokens.toLocaleString()} />
-                <Stat k="Cost" v={formatCost(entry.usage.cost)} />
+                <Stat k="Input" v={(usage.input ?? 0).toLocaleString()} />
+                <Stat k="Output" v={(usage.output ?? 0).toLocaleString()} />
+                <Stat k="Cache Read" v={(usage.cacheRead ?? 0).toLocaleString()} />
+                <Stat k="Cache Write" v={(usage.cacheWrite ?? 0).toLocaleString()} />
+                <Stat k="Total" v={(usage.totalTokens ?? 0).toLocaleString()} />
+                <Stat k="Cost" v={formatCost(usage.cost ?? 0)} />
               </div>
+              {entry.cacheMiss && (
+                <p className="mt-2 rounded-lg border border-warn/30 bg-warn-soft px-2 py-1.5 font-mono text-[10px] text-warn">
+                  Cache miss: ~{entry.cacheMiss.rebilledTokens.toLocaleString()} tokens rebilled · {entry.cacheMiss.cause}
+                  {entry.cacheMiss.estimatedCost > 0 ? ` · est. ${formatCost(entry.cacheMiss.estimatedCost)}` : ""}
+                </p>
+              )}
             </Block>
           )}
         </div>
@@ -259,6 +331,7 @@ function Stat({ k, v }: { k: string; v: string }) {
 const TONE: Record<string, { box: string; label: string; copyBtn: string }> = {
   muted: { box: "border-line bg-softer", label: "text-body", copyBtn: "border-pressed text-body hover:bg-canvas hover:text-ink" },
   alert: { box: "border-danger bg-danger-soft", label: "text-danger", copyBtn: "border-danger/40 text-danger hover:bg-canvas" },
+  warning: { box: "border-warn bg-warn-soft", label: "text-warn", copyBtn: "border-warn/40 text-warn hover:bg-canvas" },
   json: { box: "border-panel bg-panel", label: "text-panel-ink", copyBtn: "border-panel-ink/30 text-panel-ink hover:bg-panel-ink/10" },
 };
 
@@ -293,15 +366,43 @@ function Block({ label, tone, copy, children }: { label: string; tone: string; c
 // Run card
 // --------------------------------------------------------------------------- //
 
-function RunCard({ run, index, errorsOnly }: { run: DebugRun; index: number; errorsOnly: boolean }) {
-  const [expanded, setExpanded] = useState(index === 0);
+function RunCard({ run, index, errorsOnly, focus = false }: { run: DebugRun; index: number; errorsOnly: boolean; focus?: boolean }) {
+  const [expanded, setExpanded] = useState(index === 0 || focus);
+  const ref = useRef<HTMLDivElement>(null);
   const errorCount = run.errorCount ?? run.entries.filter((e) => e.isError || e.type === "llm_fallback").length;
+  const retryCount = run.entries.filter((e) => e.type === "llm_retry").length;
   const visible = errorsOnly
-    ? run.entries.filter((e) => e.type === "llm_fallback" || e.isError)
+    ? run.entries.filter((e) => e.type === "llm_fallback" || e.type === "llm_retry" || e.isError)
     : run.entries;
 
+  // Provider cache hit-rate for the header: cacheRead (summed across turns) vs
+  // the run's summed prompt tokens (promptTokensSum), so the ratio is honest —
+  // inputTokens alone is only the *last* turn's prompt size and would make the
+  // rate read as a bogus clamped 100%. Older runs predate promptTokensSum, so
+  // fall back to the previous (less accurate) inputTokens-based formula.
+  const cacheRead = run.cacheRead ?? 0;
+  const cacheWrite = run.cacheWrite ?? 0;
+  const inputTok = run.inputTokens ?? 0;
+  const promptSum = run.promptTokensSum ?? 0;
+  const cacheDenominator = promptSum > 0 ? promptSum : inputTok;
+  const displayedInput = promptSum > 0 ? promptSum : inputTok;
+  const displayedTotal = displayedInput + (run.outputTokens ?? 0);
+  const cachePct = cacheRead > 0 && cacheDenominator > 0
+    ? Math.min(100, Math.round((cacheRead / cacheDenominator) * 100))
+    : null;
+
+  // Deep-linked run: expand it and scroll it into view so the linked turn is
+  // what the user lands on (not just the top of the session).
+  useEffect(() => {
+    if (focus) {
+      setExpanded(true);
+      ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [focus]);
+
   return (
-    <div className={`overflow-hidden rounded-xl border bg-canvas ${errorCount > 0 ? "border-danger" : "border-line"}`}>
+    <div ref={ref} className={`overflow-hidden rounded-xl border bg-canvas ${
+      focus ? "border-primary ring-2 ring-primary-line" : errorCount > 0 ? "border-danger" : "border-line"}`}>
       <button onClick={() => setExpanded(!expanded)} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-soft">
         <span className="text-mute"><Chevron open={expanded} /></span>
         <div className="flex flex-1 flex-wrap items-center gap-2">
@@ -314,17 +415,40 @@ function RunCard({ run, index, errorsOnly }: { run: DebugRun; index: number; err
             <span className={CHIP}>{formatDuration(run.durationMs)}</span>
           )}
           {run.model && <span className={CHIP} title={run.model}>{prettyModel(run.model)}</span>}
+          {run.reasoningEffort && (
+            <span className={CHIP} title="reasoning effort sent to the provider (temperature dropped)">
+              effort {run.reasoningEffort}
+            </span>
+          )}
           {run.toolCalls > 0 && (
             <span className={CHIP}>{run.toolCalls} tool{run.toolCalls > 1 ? "s" : ""}</span>
           )}
           {errorCount > 0 && (
             <span className={CHIP_INK}>{errorCount} error{errorCount > 1 ? "s" : ""}</span>
           )}
+          {retryCount > 0 && (
+            <span className="rounded-full border border-warn/40 bg-warn-soft px-1.5 py-0.5 font-mono text-[10px] text-warn">
+              {retryCount} retr{retryCount > 1 ? "ies" : "y"}
+            </span>
+          )}
         </div>
         <div className="flex flex-shrink-0 items-center gap-3 font-mono text-[10px] text-body">
-          {run.inputTokens != null && <span>{run.inputTokens.toLocaleString()}↓</span>}
+          {(run.inputTokens != null || promptSum > 0) && (
+            <span title={promptSum > 0 ? "Cumulative prompt tokens across all model turns" : "Input tokens"}>
+              {displayedInput.toLocaleString()}↓
+            </span>
+          )}
           {run.outputTokens != null && <span>{run.outputTokens.toLocaleString()}↑</span>}
-          <span>{run.totalTokens.toLocaleString()} tok</span>
+          <span>{displayedTotal.toLocaleString()} tok</span>
+          {cachePct != null && (
+            <span
+              className={CHIP}
+              title={`${cacheRead.toLocaleString()} of ${cacheDenominator.toLocaleString()} prompt tokens served from provider cache${
+                cacheWrite > 0 ? ` · ${cacheWrite.toLocaleString()} written to cache` : ""}`}
+            >
+              {cachePct}% cached
+            </span>
+          )}
           <span className="text-primary-deep">{formatCost(run.totalCost)}</span>
         </div>
       </button>
@@ -358,10 +482,11 @@ function RunCard({ run, index, errorsOnly }: { run: DebugRun; index: number; err
 // Page
 // --------------------------------------------------------------------------- //
 
-export function DebugPage() {
+export function DebugPage({ openRequest }: { openRequest?: { id: string; runId?: string; nonce: number } } = {}) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [sessions, setSessions] = useState<DebugSession[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [focusRunId, setFocusRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<{ runs: DebugRun[]; totalEntries: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -369,6 +494,19 @@ export function DebugPage() {
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [runErrorsOnly, setRunErrorsOnly] = useState(false);
   const [auto, setAuto] = useState(false);
+  const [agentFilter, setAgentFilter] = useState("");
+  const [agentNames, setAgentNames] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    authFetch("/api/agents")
+      .then((r) => (r.ok ? r.json() : { agents: [] }))
+      .then((d: { agents?: { id: string; name: string }[] }) => {
+        const map: Record<string, string> = {};
+        (d.agents ?? []).forEach((a) => { map[a.id] = a.name; });
+        setAgentNames(map);
+      })
+      .catch(() => {});
+  }, []);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -398,8 +536,45 @@ export function DebugPage() {
     }
   }, []);
 
+  // Clear captured traces. NOTE: Debug traces (debug_db) are a SEPARATE store
+  // from chat conversations (chat_store) — clearing a trace here does not delete
+  // the conversation, and deleting a conversation elsewhere does not clear its
+  // trace. For a live chat channel the next inbound message re-creates the
+  // session, so a cleared trace will reappear as new turns arrive.
+  const clearSession = useCallback(async (id: string) => {
+    if (!window.confirm(
+      "Delete this session's debug trace?\n\nThis clears only the captured API-call "
+      + "trace — the chat conversation is not affected. A live bot may re-create it "
+      + "on the next message.")) return;
+    try {
+      await authFetch(`/api/debug/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    } catch { /* best-effort */ }
+    setSelected(null);
+    setDetail(null);
+    await loadSessions();
+  }, [loadSessions]);
+
+  const clearAll = useCallback(async () => {
+    if (!window.confirm(
+      "Delete ALL debug traces?\n\nThis clears every captured API-call trace. Chat "
+      + "conversations are not affected.")) return;
+    try {
+      await authFetch("/api/debug/sessions", { method: "DELETE" });
+    } catch { /* best-effort */ }
+    setSelected(null);
+    setDetail(null);
+    await loadSessions();
+  }, [loadSessions]);
+
   useEffect(() => { loadSessions(); }, [loadSessions]);
   useEffect(() => { if (selected) loadDetail(selected); }, [selected, loadDetail]);
+
+  // Deep-link from a chat turn or an activity row → preselect that session's
+  // trace, and (when given) focus the exact run so the UI lands on that turn.
+  useEffect(() => {
+    if (openRequest?.id) setSelected(openRequest.id);
+    setFocusRunId(openRequest?.runId ?? null);
+  }, [openRequest]);
 
   // Auto-refresh
   useEffect(() => {
@@ -411,17 +586,24 @@ export function DebugPage() {
     return () => clearInterval(t);
   }, [auto, selected, loadSessions, loadDetail]);
 
+  // All agents (so every agent is selectable, even before it has traced a run).
+  const agentOptions = useMemo(
+    () => Object.entries(agentNames).map(([id, name]) => ({ id, name })),
+    [agentNames],
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return sessions.filter((s) => {
       if (errorsOnly && !(s.errorCount && s.errorCount > 0)) return false;
+      if (agentFilter && s.agentId !== agentFilter) return false;
       if (q) {
         const hay = `${s.sessionId} ${s.model ?? ""} ${s.provider ?? ""} ${s.firstMessage ?? ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [sessions, search, errorsOnly]);
+  }, [sessions, search, errorsOnly, agentFilter]);
 
   if (loading) {
     return <div className="flex h-96 items-center justify-center text-primary"><Spinner /></div>;
@@ -446,6 +628,12 @@ export function DebugPage() {
             onClick={() => { loadSessions(); if (selected) loadDetail(selected); }}
             className="rounded-full border border-pressed px-4 py-1.5 text-sm font-medium text-body hover:bg-soft hover:text-ink"
           >Refresh</button>
+          <button
+            onClick={clearAll}
+            disabled={sessions.length === 0}
+            title="Delete every captured trace (chat conversations are unaffected)"
+            className="rounded-full border border-pressed px-4 py-1.5 text-sm font-medium text-body hover:border-danger hover:bg-danger-soft hover:text-danger disabled:opacity-40 disabled:hover:border-pressed disabled:hover:bg-transparent disabled:hover:text-body"
+          >Clear all</button>
         </div>
       </div>
 
@@ -467,9 +655,20 @@ export function DebugPage() {
             <div className="mb-3 flex items-center gap-2">
               <h2 className="text-sm font-semibold text-ink">Sessions</h2>
               <span className="text-mute">({filtered.length})</span>
+              {agentOptions.length > 0 && (
+                <select
+                  value={agentFilter}
+                  onChange={(e) => setAgentFilter(e.target.value)}
+                  title="Filter by agent"
+                  className={`ml-auto rounded-full border px-2 py-1 font-mono text-[10px] outline-none ${agentFilter ? "border-primary bg-primary-soft text-primary-deep" : "border-pressed bg-canvas text-body"}`}
+                >
+                  <option value="">all agents</option>
+                  {agentOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              )}
               <button
                 onClick={() => setErrorsOnly(!errorsOnly)}
-                className={`ml-auto rounded-full border px-2.5 py-1 font-mono text-[10px] ${errorsOnly ? "border-primary bg-primary text-white" : "border-pressed text-body hover:bg-soft"}`}
+                className={`${agentOptions.length > 0 ? "" : "ml-auto "}rounded-full border px-2.5 py-1 font-mono text-[10px] ${errorsOnly ? "border-primary bg-primary text-white" : "border-pressed text-body hover:bg-soft"}`}
               >errors</button>
             </div>
             <input
@@ -488,19 +687,22 @@ export function DebugPage() {
                 <button
                   key={s.sessionId}
                   onClick={() => setSelected(s.sessionId)}
-                  className={`w-full rounded-xl border p-3 text-left transition-colors ${
+                  aria-current={selected === s.sessionId}
+                  className={`relative w-full overflow-hidden rounded-xl border p-3 pl-4 text-left transition-colors ${
                     selected === s.sessionId
-                      ? "border-line bg-canvas shadow-[0_14px_40px_-28px_rgba(40,51,92,0.4)]"
+                      ? "border-primary bg-primary-soft ring-2 ring-primary-line"
                       : s.errorCount && s.errorCount > 0
                       ? "border-danger bg-canvas hover:bg-soft"
                       : "border-line hover:bg-soft"
                   }`}
                 >
+                  {/* Active accent bar — clear even on an error (red-chipped) session */}
+                  {selected === s.sessionId && <span className="absolute inset-y-0 left-0 w-1 bg-primary" />}
                   <div className="mb-1 flex items-center gap-2">
                     <span className={`size-2 shrink-0 rounded-full ${providerDot(s.provider)}`} />
-                    <span className="truncate font-mono text-xs text-ink" title={s.sessionId}>{s.sessionId}</span>
+                    <span className={`truncate font-mono text-xs ${selected === s.sessionId ? "font-semibold text-primary-deep" : "text-ink"}`} title={s.sessionId}>{s.sessionId}</span>
                     {s.provider && <span className={CHIP}>{s.provider}</span>}
-                    {s.errorCount ? <span className={`ml-auto ${CHIP_INK}`}>{s.errorCount}</span> : null}
+                    {s.errorCount ? <span className={`ml-auto ${CHIP_INK}`} title={`${s.errorCount} error(s)`}>⚠ {s.errorCount}</span> : null}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] text-mute">
                     <span>{s.runs} runs</span>
@@ -529,15 +731,23 @@ export function DebugPage() {
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <span className="font-display text-sm font-semibold text-ink">{runs.length} runs · {detail.totalEntries} entries</span>
-                <button
-                  onClick={() => setRunErrorsOnly(!runErrorsOnly)}
-                  className={`ml-auto rounded-full border px-3 py-1.5 font-mono text-[10px] ${runErrorsOnly ? "border-primary bg-primary text-white" : "border-pressed text-body hover:bg-soft"}`}
-                >errors only</button>
+                <span className="font-mono text-[10px] text-mute">newest first ↓</span>
+                <div className="ml-auto flex items-center gap-2">
+                  <button
+                    onClick={() => setRunErrorsOnly(!runErrorsOnly)}
+                    className={`rounded-full border px-3 py-1.5 font-mono text-[10px] ${runErrorsOnly ? "border-primary bg-primary text-white" : "border-pressed text-body hover:bg-soft"}`}
+                  >errors only</button>
+                  <button
+                    onClick={() => clearSession(selected)}
+                    title="Delete this session's trace (the chat conversation is unaffected)"
+                    className="rounded-full border border-pressed px-3 py-1.5 font-mono text-[10px] text-body hover:border-danger hover:bg-danger-soft hover:text-danger"
+                  >delete trace</button>
+                </div>
               </div>
               <div className="max-h-[calc(100vh-300px)] space-y-2 overflow-y-auto">
                 {shownRuns.length === 0
                   ? <div className="rounded-2xl border border-line bg-canvas p-8 text-center text-sm text-body">No runs match the filter</div>
-                  : shownRuns.map((run, i) => <RunCard key={run.runId} run={run} index={i} errorsOnly={runErrorsOnly} />)}
+                  : shownRuns.map((run, i) => <RunCard key={run.runId} run={run} index={i} errorsOnly={runErrorsOnly} focus={run.runId === focusRunId} />)}
               </div>
             </div>
           )}

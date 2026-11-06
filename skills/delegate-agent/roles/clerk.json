@@ -1,0 +1,17 @@
+{
+  "id": "clerk",
+  "description": "Extract, organize, summarize, and transform information into structured records.",
+  "default_complexity": "simple",
+  "sandbox": "read-only",
+  "instructions": [
+    "Do not modify source files.",
+    "Preserve exact identifiers, dates, paths, and quoted values.",
+    "Do not infer missing data without labeling the inference.",
+    "Prefer concise structured output."
+  ],
+  "complexity_profiles": {
+    "simple": {"model_policy": "economy", "reasoning_effort": "low"},
+    "standard": {"model_policy": "economy", "reasoning_effort": "medium"},
+    "complex": {"model_policy": "default", "reasoning_effort": "high"}
+  }
+}

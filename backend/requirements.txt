@@ -4,9 +4,16 @@ uvicorn[standard]>=0.30
 httpx>=0.27
 pydantic>=2.7
 # MCP — connect agents to external tool providers (Model Context Protocol)
-mcp>=1.2
-# Document reading (PDF text extraction; Office formats use the stdlib zip/xml readers)
-pypdf>=5.0
+mcp>=1.2,<2  # 2.0 renamed streamable_http_client + changed its stream tuple — pin until mcp_client is ported
+# Browser tools (browser_search / browser_fetch) — self-hosted headless Chromium,
+# no search API key. Needs a one-time `python -m playwright install chromium`.
+playwright>=1.40
+# Document tools (PRD-18) — PDF text extraction (pure Python; .docx/.xlsx/.pptx
+# are parsed with the stdlib).
+pypdf>=4.0
+# At-rest encryption of plaintext reasoning sidecars (PRD-27) — AES-GCM. Already
+# present transitively; declared explicitly since we import it directly.
+cryptography>=42.0
 # dev
 pytest>=8.0
 python-multipart>=0.0.9

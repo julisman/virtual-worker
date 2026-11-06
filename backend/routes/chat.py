@@ -14,12 +14,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from agent import loop
-from agent.compose import compose
-from agent.mcp_client import McpManager
-from gateway.models import resolve_model
+from agent.runner import stream_run
+from agent import run_registry
+from agent.summarize import summarize_messages
+from gateway.providers import resolve_target
 from gateway.sse import sse_event
-from storage import agent_store, mcp_store
+from storage import agent_store
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +36,16 @@ class ChatRequest(BaseModel):
     messages: list[Msg]
     model: str | None = None
     temperature: float | None = None
+    reasoningEffort: str | None = None  # per-chat effort override for external reasoning models
     tools: list[str] | None = None  # override the agent's built-in tools (optional)
     agentId: str | None = None
     system: str | None = None  # extra per-chat instruction appended to the persona
+    preloadSkills: list[str] | None = None  # skills the user force-loaded via the chat `/` picker
+
+
+class SteerRequest(BaseModel):
+    runId: str
+    content: str = ""
 
 
 def _to_wire(m: Msg) -> dict:
@@ -50,36 +57,66 @@ def _to_wire(m: Msg) -> dict:
     return {"role": m.role, "content": m.content}
 
 
-def _agent_mcp_servers(agent: dict | None) -> list[dict]:
-    """Resolve the agent's attached MCP server ids to their stored configs."""
-    ids = (agent or {}).get("mcpServers") or []
-    return [s for s in (mcp_store.get_server(i) for i in ids) if s]
-
-
 @router.post("")
 async def chat(request: Request, req: ChatRequest):
     agent = agent_store.get_agent(req.agentId) if req.agentId else agent_store.get_default_agent()
-    model = req.model or (agent or {}).get("model") or await resolve_model(None)
-    system, registry, temperature, top_p, top_k = compose(
-        agent, extra_system=req.system, tools_override=req.tools)
-    if req.temperature is not None:
-        temperature = req.temperature
-    mcp_servers = _agent_mcp_servers(agent)
     messages = [_to_wire(m) for m in req.messages]
-    agent_id = (agent or {}).get("id")
-    max_iterations = ((agent or {}).get("guardrails") or {}).get("maxIterations")
     # Tie this conversation's call trail to its chat session in Debug.
     session_id = request.headers.get("x-vw-session") or "chat:adhoc"
 
     async def gen():
-        # MCP sessions stay open for the whole stream so the loop can call their
-        # tools, then close when the request ends.
-        async with McpManager() as mcp:
-            registry.update(await mcp.build_registry(mcp_servers))
-            async for event in loop.run(
-                messages, model, registry, temperature, session_id=session_id, system=system,
-                top_p=top_p, top_k=top_k, agent_id=agent_id, max_iterations=max_iterations,
-            ):
-                yield sse_event(event, event=event.get("type"))
+        # The shared runner does compose + MCP wiring + guardrail kwargs; the
+        # chat route only adds its per-request overrides (model/tools/temp/skills)
+        # and forwards each event as SSE.
+        async for event in stream_run(
+            agent, messages, session_id=session_id,
+            extra_system=req.system, requested_model=req.model,
+            tools_override=req.tools, preload_skills=req.preloadSkills,
+            temperature_override=req.temperature,
+            reasoning_effort_override=req.reasoningEffort,
+        ):
+            # ``resultFull`` is an in-process-only field for chat-channel skill
+            # retention. Never send the unbounded tool body to web clients;
+            # keep the existing 600-char ``result`` field and every other key.
+            wire_event = ({key: value for key, value in event.items()
+                           if key != "resultFull"}
+                          if "resultFull" in event else event)
+            yield sse_event(wire_event, event=wire_event.get("type"))
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.post("/steer")
+async def steer(req: SteerRequest):
+    return {"delivered": bool(run_registry.deliver(req.runId, req.content))}
+
+
+class CompactRequest(BaseModel):
+    messages: list[Msg]
+    model: str | None = None
+    agentId: str | None = None
+    keepRecent: int = 4  # most-recent messages left verbatim after the summary
+
+
+@router.post("/compact")
+async def compact(req: CompactRequest):
+    """Summarize the older part of a chat into a compact recap so the session fits
+    the model's context window. Returns the summary text; the client rebuilds the
+    history as [summary, ...last keepRecent]. Returns summary=None when there's too
+    little history to be worth compacting."""
+    agent = agent_store.get_agent(req.agentId) if req.agentId else agent_store.get_default_agent()
+    model, target = await resolve_target(agent, req.model)
+    wire = [_to_wire(m) for m in req.messages]
+    keep = max(0, min(req.keepRecent, len(wire)))
+    head = wire[:len(wire) - keep] if keep else wire
+    head_chars = sum(len(str(m.get("content") or "")) for m in head)
+    if len(head) < 2 or head_chars < 1500:
+        return {"summary": None, "keptRecent": len(wire)}
+    # Transcribe any inline images for a blind agent before summarizing (no status
+    # event — compact is a one-shot call, not a streaming run).
+    from agent import vision_helper
+    head = await vision_helper.describe_message_images(agent, model, target, head)
+    summary = await summarize_messages(model, head, provider=target)
+    if not summary:
+        return {"summary": None, "keptRecent": len(wire)}
+    return {"summary": summary, "keptRecent": keep}

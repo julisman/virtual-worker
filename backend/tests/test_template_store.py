@@ -48,7 +48,7 @@ def test_deploy_creates_agent_with_substitution(store):
     assert "Warung Kopi" in agent["persona"]
     assert "{{" not in agent["persona"]
     assert agent["role"] == "Customer Support Representative"
-    assert agent["tools"] == ["web_search", "web_fetch"]
+    assert agent["tools"] == ["browser_search", "browser_fetch"]
     # The agent is a real, fetchable row.
     assert ags.get_agent(agent["id"])["name"] == agent["name"]
 

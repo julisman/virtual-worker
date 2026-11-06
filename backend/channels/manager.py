@@ -58,7 +58,58 @@ def strip_reasoning(text: str) -> str:
     """Remove any thinking blocks and loop footers before an external send (FR-C7)."""
     text = _THINK_RE.sub("", text or "")
     text = _STOPPED_RE.sub("", text)
-    return text.strip()
+    return _strip_meta_notes(text.strip())
+
+
+_META_NOTE_RE = re.compile(r"^\s*\[[^\]]{0,400}\][ \t]*\n?")
+_META_NOTE_WORDS = re.compile(r"tool|this (reply|turn)", re.IGNORECASE)
+
+
+def _strip_meta_notes(text: str) -> str:
+    """Drop leading bracketed provenance notes the model imitated from the
+    ``load_history`` annotation (e.g. "[this reply was produced by actually
+    CALLING tools: …]"). Those notes are hidden context for the model, never
+    content the user should see. Only brackets that talk about tools/turns are
+    dropped, so a legitimate "[link] …" opening survives."""
+    out = text or ""
+    while True:
+        m = _META_NOTE_RE.match(out)
+        if not m or not _META_NOTE_WORDS.search(m.group(0)):
+            break
+        out = out[m.end():]
+    return out.strip()
+
+
+def load_history(session_id: str, turns: int = 20) -> list[dict]:
+    """Recent prior ``{role, content}`` turns of a channel conversation (capped).
+
+    Assistant turns that ran tools are annotated with the tool names (from the
+    message meta). A multi-tool reply's text is the stitched narration between
+    tool calls — replayed verbatim it reads as "narrate and the results appear",
+    which teaches the model to fabricate instead of calling tools. The marker
+    makes the provenance explicit."""
+    from collections import Counter
+
+    sess = chat_store.get_session(session_id)
+    if not sess:
+        return []
+    out = []
+    for m in sess.get("messages", []):
+        if m.get("role") not in ("user", "assistant") or not (m.get("content") or "").strip():
+            continue
+        content = m["content"]
+        tools = ((m.get("meta") or {}).get("toolsUsed")) or []
+        if m["role"] == "assistant" and tools:
+            counts = Counter(tools)
+            summary = ", ".join(n + (f" ×{k}" if k > 1 else "") for n, k in counts.items())
+            content = (f"[this reply was produced by actually CALLING tools: {summary} — "
+                       f"every detail came from those tool results. Facts already stated "
+                       f"here may be reused without re-calling tools, but NEVER invent new "
+                       f"tool results — anything not stated here must come from a fresh "
+                       f"tool call. This note is hidden metadata, not part of the visible "
+                       f"reply — never write one like it yourself.]\n{content}")
+        out.append({"role": m["role"], "content": content})
+    return out[-max(0, turns):]
 
 
 class ChannelManager:
@@ -258,16 +309,17 @@ class ChannelManager:
     # ------------------------------------------------------------------ #
     # one turn
     # ------------------------------------------------------------------ #
-    async def _turn(self, acct: dict, msg: InboundMessage) -> None:
+    async def _turn(self, acct: dict, msg: InboundMessage, *, agent_override: dict | None = None,
+                    session_override: str | None = None) -> None:
         cfg = acct["config"]
-        session_id = msg.session_key
+        session_id = session_override or msg.session_key
         cmd = (msg.text or "").strip().lower()
         if cmd in ("/reset", "/new"):
             chat_store.delete_session(session_id)
             await self._send(acct["id"], msg.conversation_id, "Conversation reset.",
                              reply_to=msg.event_id, source="command")
             return
-        agent = self.resolve_agent(acct, msg)
+        agent = agent_override or self.resolve_agent(acct, msg)
         if cmd == "/status":
             name = (agent or {}).get("name") or "assistant"
             model = (agent or {}).get("model") or "active local model"
@@ -408,14 +460,7 @@ class ChannelManager:
 
     @staticmethod
     def _history(session_id: str, turns: int) -> list[dict]:
-        sess = chat_store.get_session(session_id)
-        if not sess:
-            return []
-        msgs = [m for m in (sess.get("messages") or []) if m.get("role") in ("user", "assistant")]
-        out = []
-        for m in msgs[-max(0, turns):]:
-            out.append({"role": m["role"], "content": m.get("content") or ""})
-        return out
+        return load_history(session_id, turns)
 
     # ------------------------------------------------------------------ #
     # outbound
@@ -462,40 +507,29 @@ class ChannelManager:
 
 
 async def execute_turn(agent: dict, messages: list[dict], session_id: str) -> tuple[str, str | None]:
-    """Run a prepared conversation through the agent's composed runtime.
+    """Run a prepared conversation (history + the new user turn) through the
+    shared runner with the chat-app directive. Module-level so tests can
+    monkeypatch it (no model needed)."""
+    from agent import runner
 
-    Mirrors ``triggers.execute_run`` but takes full ``messages`` (history +
-    the new user turn) and adds the chat-app directive. Module-level so tests
-    can monkeypatch it (no model needed)."""
-    from agent import loop
-    from agent.compose import compose
-    from agent.mcp_client import McpManager
-    from gateway.models import resolve_model
-    from storage import mcp_store
-
-    model = agent.get("model") or await resolve_model(None)
-    system, reg, temperature, top_p, top_k = compose(agent, extra_system=_CHANNEL_DIRECTIVE)
-    g = agent.get("guardrails") or {}
-    servers = [s for s in (mcp_store.get_server(i) for i in (agent.get("mcpServers") or [])) if s]
     text_parts: list[str] = []
+    last_narration = ""
     err: str | None = None
-    async with McpManager() as mcp:
-        if servers:
-            try:
-                reg.update(await mcp.build_registry(servers))
-            except Exception:  # noqa: BLE001
-                logger.debug("mcp registry failed for channel turn", exc_info=True)
-        async for ev in loop.run(
-            messages, model, reg, temperature, session_id=session_id, system=system,
-            top_p=top_p, top_k=top_k, agent_id=agent.get("id"),
-            max_iterations=g.get("maxIterations"),
-        ):
-            t = ev.get("type")
-            if t == "text":
-                text_parts.append(ev.get("delta", ""))
-            elif t == "error":
-                err = ev.get("message") or "run failed"
-    return "".join(text_parts).strip(), err
+    async for ev in runner.stream_run(agent, messages, session_id=session_id,
+                                      extra_system=_CHANNEL_DIRECTIVE):
+        t = ev.get("type")
+        if t == "text":
+            text_parts.append(ev.get("delta", ""))
+        elif t == "tool_call":
+            # Text streamed before a tool call is narration, not the answer —
+            # keep only what follows the last tool call (stash as a fallback).
+            if "".join(text_parts).strip():
+                last_narration = "".join(text_parts)
+            text_parts = []
+        elif t == "error":
+            err = ev.get("message") or "run failed"
+    final = "".join(text_parts).strip() or last_narration.strip()
+    return final, err
 
 
 manager = ChannelManager()

@@ -112,15 +112,36 @@ def test_record_run_advances_recurring(store):
     assert after["nextRunAt"] >= first_next
 
 
-def test_compose_injects_current_time(store):
-    # The agent must be told "now" so it can schedule relative times correctly.
+def test_schedule_tools_report_now(store):
+    # The prompt carries no clock at all (a per-turn injection confused small
+    # local models, and a persona clock breaks the cached prefix). The agent
+    # learns "now" from the schedule tools' own results instead.
     from datetime import datetime
 
+    from agent.scheduler import make_schedule_tools
+    tools = make_schedule_tools("a-now")
+    today = datetime.now().strftime("%Y-%m-%d")
+    listed = asyncio.run(tools["schedule_list"]["fn"]())          # empty case
+    assert today in listed
+    asyncio.run(tools["schedule_create"]["fn"](prompt="p", cron="0 8 * * *"))
+    listed = asyncio.run(tools["schedule_list"]["fn"]())          # non-empty case
+    assert today in listed
+    missing = asyncio.run(tools["schedule_create"]["fn"](prompt="p"))  # no cron/at
+    assert today in missing
+    bad = asyncio.run(tools["schedule_create"]["fn"](prompt="p", at="not-a-date"))
+    assert today in bad
+
+
+def test_compose_persona_is_stable_and_time_free(store):
+    # The persona system prompt must NOT carry the volatile timestamp: keeping it
+    # out is what lets llama.cpp reuse the prefix KV-cache across turns. It must
+    # also be byte-identical on repeated composes (no per-call volatility).
     from agent.compose import compose
-    system, registry, *_ = compose({"id": "a1", "persona": "You are helpful."})
-    assert "Current date & time:" in system
-    assert datetime.now().strftime("%Y-%m-%d") in system
-    assert "schedule_create" in registry  # scheduler tools still wired
+    system_a, registry, *_ = compose({"id": "a1", "persona": "You are helpful."})
+    system_b, *_ = compose({"id": "a1", "persona": "You are helpful."})
+    assert "Current date & time:" not in system_a
+    assert system_a == system_b            # stable prefix across turns
+    assert "schedule_create" in registry   # scheduler tools still wired
 
 
 def test_schedule_tools(store):

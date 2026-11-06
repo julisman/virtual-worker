@@ -1,0 +1,15 @@
+# Curated backend deps for the FROZEN desktop backend (PyInstaller).
+# Includes Playwright so the browser tools (web fetch/search + interactive browser
+# control) work in the packaged app. The packaged app drives the user's system
+# Google Chrome (channel="chrome"), so no Chromium is bundled — only Playwright's
+# node driver ships (inside the frozen backend). Still EXCLUDES the heavy Apple-only
+# stacks (mlx*/transformers) and test-only deps — those degrade gracefully.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27
+pydantic>=2.7
+mcp>=1.2
+websockets>=12.0
+python-multipart>=0.0.9
+playwright>=1.40
+pyinstaller>=6.6

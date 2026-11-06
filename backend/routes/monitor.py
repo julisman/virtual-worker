@@ -140,6 +140,12 @@ async def overview() -> dict:
     started_at = mgr._state.get("started_at")
     rss = _process_rss_bytes(pid) if rt.get("running") else None
 
+    try:
+        from runtime import searxng_manager
+        sx = await searxng_manager.status()
+    except Exception:  # noqa: BLE001
+        sx = {"managed": False, "installed": False, "running": False}
+
     api = debug_db.summary()
 
     return {
@@ -186,6 +192,12 @@ async def overview() -> dict:
             "port": rt.get("port"),
             "error": rt.get("error"),
         },
+        "searxng": {
+            "managed": sx.get("managed"),
+            "installed": sx.get("installed"),
+            "running": sx.get("running"),
+            "port": sx.get("port"),
+        },
         "api": {
             "runs": api.get("totalRuns", 0),
             "errors": api.get("totalErrors", 0),
@@ -225,6 +237,7 @@ async def logs(lines: int = 200) -> dict:
 async def errors(limit: int = 25) -> dict:
     limit = max(1, min(limit, 200))
     rows: list[dict] = []
+    conn = None
     try:
         conn = debug_db.get_connection()
         cur = conn.execute(
@@ -252,4 +265,7 @@ async def errors(limit: int = 25) -> dict:
             })
     except Exception as exc:  # noqa: BLE001
         logger.debug("recent-errors query failed: %s", exc)
+    finally:
+        if conn is not None:
+            conn.close()
     return {"errors": rows}

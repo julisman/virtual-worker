@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from storage import _sqlite
 import threading
 from datetime import datetime, timezone
 
@@ -24,7 +25,7 @@ def _now() -> str:
 def _conn() -> sqlite3.Connection:
     p = db_path()
     ensure_dir(p.parent)
-    conn = sqlite3.connect(str(p))
+    conn = _sqlite.connect(str(p))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
@@ -46,21 +47,30 @@ def _conn() -> sqlite3.Connection:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages (session_id, seq)")
-    # Guarded migration: per-message meta (timing / token usage / tools used).
+    # Guarded migrations: per-message meta (timing / token usage / tools used)
+    # and the ordered work timeline (narration + tool calls with results — what
+    # the chat UI's collapsible work panel renders; without it a page refresh
+    # degraded to the flat legacy `steps` view).
     mcols = {r["name"] for r in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
     if "meta" not in mcols:
         conn.execute("ALTER TABLE chat_messages ADD COLUMN meta TEXT")
+    if "timeline" not in mcols:
+        conn.execute("ALTER TABLE chat_messages ADD COLUMN timeline TEXT")
+    conn.mark_initialized()
     return conn
 
 
-def list_sessions() -> list[dict]:
+def list_sessions(agent_id: str | None = None) -> list[dict]:
+    where = "WHERE s.agent_id = ?" if agent_id else ""
+    params = (agent_id,) if agent_id else ()
     with _conn() as conn:
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT s.id, s.title, s.model, s.agent_id, s.created_at, s.updated_at,
                    COUNT(m.id) AS message_count
             FROM chat_sessions s LEFT JOIN chat_messages m ON m.session_id = s.id
+            {where}
             GROUP BY s.id ORDER BY s.updated_at DESC
-        """).fetchall()
+        """, params).fetchall()
     return [{
         "id": r["id"], "title": r["title"], "model": r["model"], "agentId": r["agent_id"],
         "createdAt": r["created_at"], "updatedAt": r["updated_at"],
@@ -74,14 +84,17 @@ def get_session(session_id: str) -> dict | None:
         if not s:
             return None
         rows = conn.execute(
-            "SELECT role, content, images, steps, meta FROM chat_messages WHERE session_id = ? ORDER BY seq ASC",
+            "SELECT role, content, images, steps, timeline, meta, ts "
+            "FROM chat_messages WHERE session_id = ? ORDER BY seq ASC",
             (session_id,),
         ).fetchall()
     messages = [{
         "role": r["role"], "content": r["content"],
         "images": json.loads(r["images"]) if r["images"] else None,
         "steps": json.loads(r["steps"]) if r["steps"] else None,
+        "timeline": json.loads(r["timeline"]) if r["timeline"] else None,
         "meta": json.loads(r["meta"]) if r["meta"] else None,
+        "ts": r["ts"],
     } for r in rows]
     return {"id": s["id"], "title": s["title"], "model": s["model"], "agentId": s["agent_id"],
             "createdAt": s["created_at"], "updatedAt": s["updated_at"], "messages": messages}
@@ -102,11 +115,13 @@ def upsert_session(session_id: str, title: str, model: str | None, messages: lis
         conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
         for seq, m in enumerate(messages):
             conn.execute(
-                "INSERT INTO chat_messages (session_id, seq, role, content, images, steps, meta, ts) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO chat_messages "
+                "(session_id, seq, role, content, images, steps, timeline, meta, ts) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (session_id, seq, m.get("role"), m.get("content", ""),
                  json.dumps(m["images"]) if m.get("images") else None,
                  json.dumps(m["steps"]) if m.get("steps") else None,
+                 json.dumps(m["timeline"]) if m.get("timeline") else None,
                  json.dumps(m["meta"]) if m.get("meta") else None, now),
             )
     return {"id": session_id, "title": title, "model": model, "agentId": agent_id, "updatedAt": now}

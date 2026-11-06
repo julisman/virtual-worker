@@ -20,7 +20,10 @@ guards (PRD §6.4 FR-14):
   - **depth**  — ``MAX_DELEGATION_DEPTH``: how deep synchronous asks may nest.
   - **budget** — ``MAX_ASKS_PER_RUN`` / ``MAX_ASSIGNS_PER_RUN``: per-run caps so a
                  single turn can't fan out into a swarm.
-  - **cycle**  — a visited-chain guard refuses A→B→A handoff loops.
+  - **cycle**  — a visited-chain guard refuses A→B→A loops. For synchronous
+                 asks the chain lives in the call stack; for board handoffs it is
+                 PERSISTED on the task (``metadata.delegationChain``) and threaded
+                 back in by the worker, so the guard also holds across runs.
 
 Every delegation is journaled on BOTH agents' activity feeds (type
 ``delegation``) so the org chart in motion is fully auditable.
@@ -29,6 +32,7 @@ Every delegation is journaled on BOTH agents' activity feeds (type
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from storage import activity_store, agent_store, task_store
 
@@ -45,6 +49,29 @@ _ASK_DIRECTIVE = (
     "Your text reply is handed straight back to the teammate — do not delegate "
     "this onward unless you genuinely must."
 )
+
+
+def origin_from_session(session_id: str | None, inbound: dict | None = None) -> dict | None:
+    """Build the task reply target captured by an interactive conversation."""
+    if not session_id:
+        return None
+    if session_id.startswith("chat:"):
+        return {"kind": "in_app", "sessionId": session_id,
+                "capturedAt": datetime.now(timezone.utc).isoformat()}
+    # A chat-channel session: "<channel>:<accountId>:<conversationId>" (see
+    # channels.manager). The live inbound message, when available, carries the
+    # exact conversation + message id to reply to.
+    parts = session_id.split(":", 2)
+    if len(parts) == 3 and parts[0] not in ("worker", "schedule", "trigger", "golden"):
+        origin = {"kind": "channel", "sessionId": session_id, "channel": parts[0],
+                  "accountId": parts[1], "conversationId": parts[2],
+                  "capturedAt": datetime.now(timezone.utc).isoformat()}
+        if inbound is not None:
+            origin["conversationId"] = getattr(inbound, "conversation_id", None) or origin["conversationId"]
+            origin["messageId"] = getattr(inbound, "event_id", None)
+            origin["chatKind"] = getattr(inbound, "kind", None)
+        return {key: value for key, value in origin.items() if value is not None}
+    return None
 
 
 def _summarize(text: str, n: int = 100) -> str:
@@ -79,21 +106,39 @@ def _resolve(agent_ref: str, caller_id: str) -> dict | None:
         return a
     mates = [m for m in agent_store.list_agents() if m["id"] != caller_id]
     low = ref.lower()
-    return (next((m for m in mates if (m["name"] or "").lower() == low), None)
-            or next((m for m in mates if (m["name"] or "").lower().startswith(low)), None))
+    exact = next((m for m in mates if (m["name"] or "").lower() == low), None)
+    if exact:
+        return exact
+    pre = [m for m in mates if (m["name"] or "").lower().startswith(low)]
+    # A prefix match is only safe when it's unambiguous — "Ana" must not
+    # silently pick between "Ana Belle" and "Anabel".
+    return pre[0] if len(pre) == 1 else None
 
 
 def make_team_tools(caller_agent_id: str, *, depth: int = 0,
                     chain: tuple[str, ...] | None = None,
-                    budget: dict | None = None) -> dict[str, dict]:
+                    budget: dict | None = None,
+                    ask_cap: int | None = None,
+                    session_id: str | None = None) -> dict[str, dict]:
     """Build the ``{name: {schema, fn}}`` delegation registry for ``caller_agent_id``.
 
     ``depth``/``chain``/``budget`` thread the loop guards through nested
     ``ask_agent`` calls. Top-level (a normal agent run) starts at depth 0 with a
     fresh per-run budget; a nested consult bumps depth and extends the chain.
+
+    ``ask_cap`` is the synchronous-consult (ask) limit for the whole run — the
+    ORIGINAL caller's (run owner's) ``askBudget`` if set, else
+    ``MAX_ASKS_PER_RUN``. It is resolved once at the top level and threaded
+    unchanged through nested consults so a teammate can't widen the owner's cap.
     """
     chain = chain if chain is not None else (caller_agent_id,)
+    if caller_agent_id not in chain:
+        chain = chain + (caller_agent_id,)
     budget = budget if budget is not None else {"asks": 0, "assigns": 0}
+    if ask_cap is None:
+        owner = agent_store.get_agent(caller_agent_id)
+        owner_budget = (owner or {}).get("askBudget")
+        ask_cap = owner_budget if isinstance(owner_budget, int) else MAX_ASKS_PER_RUN
 
     def _caller_name() -> str:
         a = agent_store.get_agent(caller_agent_id)
@@ -122,14 +167,32 @@ def make_team_tools(caller_agent_id: str, *, depth: int = 0,
             return f"no such agent {agent!r}. Use team_list to see who's available."
         if target["id"] == caller_agent_id:
             return "refused: cannot assign a task to yourself — use task_create."
+        if target["id"] in chain:
+            # Cross-run loop guard: the chain arrived via the task this run is
+            # working (metadata.delegationChain), so an A→B→A assignment
+            # ping-pong across worker runs is refused here.
+            return (f"refused: delegation cycle detected ({' → '.join(chain)} → "
+                    f"{target['id']}). Breaking the loop.")
 
         budget["assigns"] += 1
         caller_name = _caller_name()
+        inbound = None
+        if session_id and not session_id.startswith("chat:"):
+            try:
+                from channels.manager import CURRENT_INBOUND
+                inbound = CURRENT_INBOUND.get()
+            except Exception:  # noqa: BLE001
+                inbound = None
+        origin = origin_from_session(session_id, inbound=inbound)
+        metadata = {"assignedBy": caller_agent_id, "assignedByName": caller_name,
+                    "delegationChain": list(chain) + [target["id"]]}
+        if origin is not None:
+            metadata["replyTo"] = origin
         t = task_store.create(
             target["id"],
             {"title": task_title, "description": task_description, "priority": priority,
              "status": "todo",
-             "metadata": {"assignedBy": caller_agent_id, "assignedByName": caller_name}},
+             "metadata": metadata},
             origin="agent")
         # Journal on BOTH feeds (PRD §6.6 FR-19) so the handoff is auditable.
         activity_store.log(target["id"], "delegation",
@@ -145,8 +208,8 @@ def make_team_tools(caller_agent_id: str, *, depth: int = 0,
         if depth >= MAX_DELEGATION_DEPTH:
             return (f"refused: delegation depth limit ({MAX_DELEGATION_DEPTH}) reached — "
                     "cannot consult another agent from here.")
-        if budget["asks"] >= MAX_ASKS_PER_RUN:
-            return f"refused: consult budget ({MAX_ASKS_PER_RUN} per run) exhausted."
+        if budget["asks"] >= ask_cap:
+            return f"refused: consult budget ({ask_cap} per run) exhausted."
         if not question.strip():
             return "ask_agent needs a 'question'."
         target = _resolve(agent, caller_agent_id)
@@ -164,21 +227,35 @@ def make_team_tools(caller_agent_id: str, *, depth: int = 0,
         # Lazy imports break the compose↔team cycle (compose imports this module).
         from agent import loop
         from agent.compose import compose
-        from gateway.models import resolve_model
+        from gateway.providers import resolve_target
 
+        # Resolve the TEAMMATE onto its own configured backend (local upstream or
+        # an external provider) — mirrors runner/worker so a remote-only setup can
+        # consult a provider-backed teammate instead of failing on the local :8080.
+        provider_target = None
         try:
-            model = target.get("model") or await resolve_model(None)
+            model, provider_target = await resolve_target(target)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("resolve_model failed: %s", exc)
+            logger.debug("resolve_target failed: %s", exc)
             model = None
-        if not model:
+        # A provider-backed teammate (target set) needs no local active model.
+        if not model and provider_target is None:
             return "could not consult: no active model. Activate one in Models."
 
-        system, registry, temperature, top_p, top_k = compose(target, extra_system=_ASK_DIRECTIVE)
+        # Honour the TEAMMATE's own guardrails on the consult path (agent_store
+        # merges defaults on read, so this is always populated) — mirrors runner
+        # so a consulted agent isn't silently capped at loop.run's MAX_ITERATIONS
+        # fallback. 0 stays "unlimited (backstopped)", exactly as runner passes it.
+        g = target.get("guardrails") or {}
+
+        ask_session_id = f"ask:{caller_agent_id}->{target['id']}"
+        system, registry, temperature, top_p, top_k, repeat_penalty, reasoning_effort = compose(
+            target, extra_system=_ASK_DIRECTIVE, session_id=ask_session_id)
         # Re-bind the teammate's team tools so a nested ask is one level deeper and
         # carries the visited chain — this is the recursion/cycle guard in action.
         registry.update(make_team_tools(
-            target["id"], depth=depth + 1, chain=chain + (target["id"],), budget=budget))
+            target["id"], depth=depth + 1, chain=chain + (target["id"],),
+            budget=budget, ask_cap=ask_cap))
 
         activity_store.log(caller_agent_id, "delegation",
                            f"Asked {target['name']}: {_summarize(question, 80)}",
@@ -189,8 +266,12 @@ def make_team_tools(caller_agent_id: str, *, depth: int = 0,
         try:
             async for ev in loop.run(
                 [{"role": "user", "content": question}], model, registry, temperature,
-                session_id=f"ask:{caller_agent_id}->{target['id']}", system=system,
-                top_p=top_p, top_k=top_k, agent_id=target["id"]):
+                session_id=ask_session_id, system=system,
+                top_p=top_p, top_k=top_k, repeat_penalty=repeat_penalty,
+                reasoning_effort=reasoning_effort, agent_id=target["id"],
+                max_iterations=g.get("maxIterations"), wrapup_warn_at=g.get("wrapupWarnAt"),
+                max_output_tokens=g.get("maxOutputTokens"),
+                provider=provider_target):
                 if ev.get("type") == "text":
                     text_parts.append(ev.get("delta", ""))
                 elif ev.get("type") == "error":

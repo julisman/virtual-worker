@@ -18,6 +18,18 @@ def db(tmp_path, monkeypatch):
 
 # --- task_store ------------------------------------------------------------- #
 
+def test_task_description_and_criteria_roundtrip(db):
+    t = task_store.create("a1", {"title": "Build it", "description": "do the thing",
+                                 "criteria": "- compiles\n- tests pass"})
+    assert t["description"] == "do the thing"
+    assert t["criteria"] == "- compiles\n- tests pass"
+    # criteria is editable; clearing it works too
+    u = task_store.update("a1", t["id"], {"criteria": "- shipped"})
+    assert u["criteria"] == "- shipped"
+    cleared = task_store.update("a1", t["id"], {"criteria": ""})
+    assert cleared["criteria"] == ""
+
+
 def test_task_crud_and_lifecycle(db):
     t = task_store.create("a1", {"title": "Ship feature", "priority": "high"})
     assert t["status"] == "todo" and t["priority"] == "high" and t["startedAt"] is None
@@ -111,6 +123,25 @@ def test_shell_denylist_blocked_in_every_tier():
         assert _classify(["curl", "http://x"], workspace=ws)[0] is False
         assert _classify(["git", "push"], workspace=ws)[0] is False
     assert _classify(["find", ".", "-delete"], workspace=True)[0] is False
+
+
+def test_shell_interpreters_blocked_in_readonly_tier():
+    # The read-only tier is a security boundary; a language interpreter there
+    # would let `python3 -c "..."` defeat the whole deny-list. Refused without a
+    # working folder, still available in workspace mode (permissive by design).
+    for prog in (["python3", "-c", "import os"], ["node", "-e", "1"],
+                 ["env"], ["awk", "BEGIN{system(\"id\")}"]):
+        assert _classify(prog, workspace=False)[0] is False, prog
+        assert _classify(prog, workspace=True)[0] is True, prog
+
+
+def test_shell_git_dash_C_push_still_blocked():
+    # `git -C . push` must not slip past the push block by misreading `.` as the
+    # subcommand. Global value-taking options are skipped when finding the verb.
+    assert _classify(["git", "-C", ".", "push"], workspace=True)[0] is False
+    assert _classify(["git", "-c", "k=v", "push", "origin"], workspace=True)[0] is False
+    # a legitimate read-only verb behind a global option still classifies right
+    assert _classify(["git", "-C", "/repo", "status"], workspace=False)[0] is True
 
 
 def test_shell_tool_runs_and_refuses(tmp_path):

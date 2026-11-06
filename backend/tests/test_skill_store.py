@@ -34,6 +34,14 @@ def test_parse_frontmatter_basic():
     assert body.startswith("# Refund procedure")
 
 
+def test_web_auth_domains_are_exposed_in_skill_metadata():
+    md = "---\nname: Portal Reader\nweb_auth_domains:\n  - data.example.com\n  - '*.example.com'\n---\nbody"
+    meta, _ = ss.parse_frontmatter(md)
+    assert meta["web_auth_domains"] == ["data.example.com", "*.example.com"]
+    skill = ss._meta_to_skill("portal-reader", meta, "body")
+    assert skill["webAuthDomains"] == ["data.example.com", "*.example.com"]
+
+
 def test_parse_frontmatter_quotes_and_none():
     meta, body = ss.parse_frontmatter('---\nname: "Quoted"\n---\nhi')
     assert meta["name"] == "Quoted"
@@ -109,6 +117,34 @@ def test_zip_path_traversal_blocked(store):
         zf.writestr("../escape.txt", "pwned")
     with pytest.raises(ValueError, match="unsafe path"):
         store.save_zip("evil.zip", buf.getvalue())
+
+
+def test_export_zip_roundtrips(store):
+    # Save a pack with a resource, export it, and re-import the exported bytes —
+    # the skill (body + resources) must come back intact.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("mypack/SKILL.md", SAMPLE)
+        zf.writestr("mypack/references/email.txt", "Dear customer")
+    store.save_zip("mypack.zip", buf.getvalue())
+
+    data = store.export_zip("refund-handler")
+    assert data is not None
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        names = zf.namelist()
+    assert "refund-handler/SKILL.md" in names          # nested under <slug>/
+    assert "refund-handler/references/email.txt" in names
+
+    store.delete_skill("refund-handler")
+    reimported = store.save_zip("refund-handler.zip", data)
+    assert reimported["slug"] == "refund-handler"
+    assert "references/email.txt" in reimported["files"]
+    assert "Refund procedure" in store.skill_body("refund-handler")
+
+
+def test_export_zip_missing_or_unsafe(store):
+    assert store.export_zip("does-not-exist") is None
+    assert store.export_zip("../../etc") is None       # path traversal rejected
 
 
 def test_delete(store):

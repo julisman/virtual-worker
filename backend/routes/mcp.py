@@ -27,6 +27,7 @@ class ServerIn(BaseModel):
     args: list[str] | None = None
     env: dict[str, str] | None = None
     url: str | None = None
+    allowedTools: list[str] | None = None  # empty/absent = expose every tool
     enabled: bool | None = None
 
 
@@ -74,5 +75,6 @@ async def test_server(server_id: str):
     try:
         tools = await mcp_client.list_server_tools(cfg)
     except Exception as exc:  # noqa: BLE001
+        logger.exception("MCP test connection failed for server %s", server_id)
         raise HTTPException(400, f"connection failed: {exc}") from exc
     return {"tools": tools}

@@ -2,23 +2,33 @@
 // and Activity (the work journal). Monochrome cockpit language.
 
 import { useCallback, useEffect, useState } from "react";
-import { apiJson, apiPost } from "@/lib/api";
+import { apiFetch, apiJson, apiPost } from "@/lib/api";
 
 // --------------------------------------------------------------------------- //
 // Types
 // --------------------------------------------------------------------------- //
 
 export interface TaskT {
-  id: string; title: string; description: string; status: string; priority: string;
+  id: string; title: string; description: string; criteria: string; status: string; priority: string;
   orderKey: number; origin: string; resultSummary: string;
   dueAt: string | null; startedAt: string | null; completedAt: string | null; createdAt: string;
 }
-interface ActivityT { id: string; type: string; summary: string; taskId: string | null; createdAt: string }
+interface ActivityT {
+  id: string; type: string; summary: string; taskId: string | null; createdAt: string;
+  detail?: { debugRunId?: string; debugSessionId?: string; [k: string]: unknown } | null;
+}
 interface Standup {
   day: string; headline: string; byType: Record<string, number>;
   taskCounts: Record<string, number>; waitingOnMentor: number; highlights: string[]; totalActivities: number;
 }
 interface Comment { id: string; author: string; text: string; createdAt: string }
+export interface InboxItem {
+  id: string; agentId: string; fromAgentId: string; taskId: string; originSessionId: string;
+  kind: "task_closed";
+  payload: { taskId: string; title: string; status: "done" | "blocked"; fromAgentName: string; resultHead: string };
+  status: "pending" | "processing" | "processed" | "failed" | "dismissed";
+  attempts: number; lastError: string | null; createdAt: string; processedAt: string | null;
+}
 
 const COLUMNS: { id: string; label: string }[] = [
   { id: "backlog", label: "Backlog" },
@@ -28,6 +38,7 @@ const COLUMNS: { id: string; label: string }[] = [
   { id: "review", label: "In review" },
   { id: "done", label: "Done" },
 ];
+const BOARD_PAGE_SIZE = 8;   // cards shown per column before paginating
 const PRIORITIES = ["low", "medium", "high", "urgent"];
 const PRIORITY_DOT: Record<string, string> = {
   low: "bg-pressed", medium: "bg-info", high: "bg-warn", urgent: "bg-danger",
@@ -135,19 +146,37 @@ export function OverviewView({ agentId, onChanged }: { agentId: string; onChange
 // Board (Kanban)
 // --------------------------------------------------------------------------- //
 
-export function BoardView({ agentId }: { agentId: string }) {
+export function BoardView({ agentId, onTrace }: {
+  agentId: string;
+  onTrace?: (sessionId: string, runId?: string) => void;
+}) {
   const [tasks, setTasks] = useState<TaskT[]>([]);
   const [dragId, setDragId] = useState<string | null>(null);
   const [open, setOpen] = useState<TaskT | null>(null);
   const [adding, setAdding] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
+  const [draftDesc, setDraftDesc] = useState("");
+  const [draftCriteria, setDraftCriteria] = useState("");
   const [draftPriority, setDraftPriority] = useState("medium");
 
   const load = useCallback(async () => {
     try { setTasks((await apiJson<{ tasks: TaskT[] }>(`/api/agents/${encodeURIComponent(agentId)}/tasks`)).tasks); }
     catch { /* */ }
   }, [agentId]);
-  useEffect(() => { load(); }, [load]);
+  // Poll so the board reflects the worker live (a card moving to In progress,
+  // a status flipping to done) without a manual refresh.
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+
+  // Keep the opened detail in sync with fresh task data, but only when a field
+  // it shows actually changed (avoids re-rendering the modal every poll).
+  useEffect(() => {
+    setOpen((cur) => {
+      if (!cur) return cur;
+      const fresh = tasks.find((t) => t.id === cur.id);
+      if (!fresh || (fresh.status === cur.status && fresh.resultSummary === cur.resultSummary)) return cur;
+      return fresh;
+    });
+  }, [tasks]);
 
   const move = async (id: string, status: string) => {
     setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, status } : t)));  // optimistic
@@ -158,8 +187,11 @@ export function BoardView({ agentId }: { agentId: string }) {
   };
   const add = async () => {
     if (!draftTitle.trim()) return;
-    await apiPost(`/api/agents/${encodeURIComponent(agentId)}/tasks`, { title: draftTitle.trim(), priority: draftPriority, status: "todo" }).catch(() => {});
-    setDraftTitle(""); setDraftPriority("medium"); setAdding(false); load();
+    await apiPost(`/api/agents/${encodeURIComponent(agentId)}/tasks`, {
+      title: draftTitle.trim(), description: draftDesc.trim(), criteria: draftCriteria.trim(),
+      priority: draftPriority, status: "todo",
+    }).catch(() => {});
+    setDraftTitle(""); setDraftDesc(""); setDraftCriteria(""); setDraftPriority("medium"); setAdding(false); load();
   };
   const remove = async (id: string) => {
     await apiJson(`/api/agents/${encodeURIComponent(agentId)}/tasks/${id}`, { method: "DELETE" }).catch(() => {});
@@ -176,58 +208,169 @@ export function BoardView({ agentId }: { agentId: string }) {
       </div>
 
       {adding && (
-        <div className="mb-3 flex items-center gap-2 rounded-2xl border border-line bg-canvas p-3 shadow-[0_14px_40px_-30px_rgba(40,51,92,0.4)]">
-          <input autoFocus className={`${inputCls} flex-1`} value={draftTitle} placeholder="Task title…"
-            onChange={(e) => setDraftTitle(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") add(); if (e.key === "Escape") setAdding(false); }} />
-          <select className="rounded-xl border border-pressed bg-canvas px-2 py-2 text-sm text-ink" value={draftPriority}
-            onChange={(e) => setDraftPriority(e.target.value)}>
-            {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <button onClick={add} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-primary-deep">Add</button>
+        <div className="mb-3 space-y-2 rounded-2xl border border-line bg-canvas p-3 shadow-[0_14px_40px_-30px_rgba(40,51,92,0.4)]">
+          <div className="flex items-center gap-2">
+            <input autoFocus className={`${inputCls} flex-1`} value={draftTitle} placeholder="Task title…"
+              onChange={(e) => setDraftTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) add(); if (e.key === "Escape") setAdding(false); }} />
+            <select className="rounded-xl border border-pressed bg-canvas px-2 py-2 text-sm text-ink" value={draftPriority}
+              onChange={(e) => setDraftPriority(e.target.value)}>
+              {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          <textarea className={`${inputCls} min-h-[56px] resize-y`} value={draftDesc} placeholder="Description — what needs to be done…"
+            onChange={(e) => setDraftDesc(e.target.value)} />
+          <textarea className={`${inputCls} min-h-[56px] resize-y`} value={draftCriteria}
+            placeholder="Definition of done — the criteria that must be met (one per line)…"
+            onChange={(e) => setDraftCriteria(e.target.value)} />
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setAdding(false)} className="rounded-xl border border-pressed px-3 py-2 text-xs text-body hover:border-ink hover:text-ink">Cancel</button>
+            <button onClick={add} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-primary-deep">Add task</button>
+          </div>
         </div>
       )}
 
       <div className="flex gap-3 overflow-x-auto pb-2">
-        {COLUMNS.map((col) => {
-          const items = tasks.filter((t) => t.status === col.id);
-          return (
-            <div key={col.id}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => { if (dragId) move(dragId, col.id); setDragId(null); }}
-              className="flex w-60 shrink-0 flex-col rounded-2xl border border-line bg-soft p-2">
-              <div className="flex items-center justify-between px-2 py-1.5">
-                <span className="text-xs font-semibold text-ink">{col.label}</span>
-                <span className="font-mono text-[10px] text-mute">{items.length}</span>
-              </div>
-              <div className="flex min-h-[40px] flex-col gap-2">
-                {items.map((t) => (
-                  <button key={t.id} draggable onDragStart={() => setDragId(t.id)} onClick={() => setOpen(t)}
-                    className="group rounded-xl border border-line bg-canvas p-2.5 text-left shadow-[0_10px_28px_-24px_rgba(40,51,92,0.5)] transition-colors hover:border-primary-line">
-                    <div className="flex items-start gap-2">
-                      <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${PRIORITY_DOT[t.priority] || "bg-mute"}`} title={t.priority} />
-                      <span className="min-w-0 flex-1 text-sm text-ink">{t.title}</span>
-                    </div>
-                    <div className="mt-1.5 flex items-center gap-1.5 pl-3.5">
-                      {t.origin === "intern" && <span className="rounded bg-soft px-1.5 py-0.5 font-mono text-[9px] text-mute">self</span>}
-                      <span className="font-mono text-[9px] text-mute">{ago(t.createdAt)}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          );
-        })}
+        {COLUMNS.map((col) => (
+          <BoardColumn key={col.id} col={col} items={tasks.filter((t) => t.status === col.id)}
+            onDrop={() => { if (dragId) move(dragId, col.id); setDragId(null); }}
+            onDragStart={setDragId} onOpen={setOpen} />
+        ))}
       </div>
 
-      {open && <TaskDetail agentId={agentId} task={open} onClose={() => setOpen(null)} onMove={move} onDelete={remove} onChanged={load} />}
+      {open && <TaskDetail agentId={agentId} task={open} onClose={() => setOpen(null)} onMove={move} onDelete={remove} onChanged={load} onTrace={onTrace} />}
     </div>
   );
 }
 
-function TaskDetail({ agentId, task, onClose, onMove, onDelete, onChanged }: {
+// One Kanban column. Paginates its own cards so a column with a long tail (e.g.
+// a Done pile that grows without bound) stays a fixed height instead of pushing
+// the board off-screen. Each column tracks its page independently.
+function BoardColumn({ col, items, onDrop, onDragStart, onOpen }: {
+  col: { id: string; label: string };
+  items: TaskT[];
+  onDrop: () => void;
+  onDragStart: (id: string) => void;
+  onOpen: (t: TaskT) => void;
+}) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(items.length / BOARD_PAGE_SIZE));
+  // Clamp when the column shrinks (a card dragged out, or the poll returns
+  // fewer) so we never strand the view on an empty trailing page.
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  const start = (page - 1) * BOARD_PAGE_SIZE;
+  const pageItems = items.slice(start, start + BOARD_PAGE_SIZE);
+
+  return (
+    <div
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDrop}
+      className="flex w-60 shrink-0 flex-col rounded-2xl border border-line bg-soft p-2">
+      <div className="flex items-center justify-between px-2 py-1.5">
+        <span className="text-xs font-semibold text-ink">{col.label}</span>
+        <span className="font-mono text-[10px] text-mute">{items.length}</span>
+      </div>
+      <div className="flex min-h-[40px] flex-col gap-2">
+        {pageItems.map((t) => (
+          <button key={t.id} draggable onDragStart={() => onDragStart(t.id)} onClick={() => onOpen(t)}
+            className="group rounded-xl border border-line bg-canvas p-2.5 text-left shadow-[0_10px_28px_-24px_rgba(40,51,92,0.5)] transition-colors hover:border-primary-line">
+            <div className="flex items-start gap-2">
+              <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${PRIORITY_DOT[t.priority] || "bg-mute"}`} title={t.priority} />
+              <span className="min-w-0 flex-1 text-sm text-ink">{t.title}</span>
+            </div>
+            <div className="mt-1.5 flex items-center gap-1.5 pl-3.5">
+              {t.origin === "intern" && <span className="rounded bg-soft px-1.5 py-0.5 font-mono text-[9px] text-mute">self</span>}
+              <span className="font-mono text-[9px] text-mute">{ago(t.createdAt)}</span>
+            </div>
+          </button>
+        ))}
+      </div>
+      {totalPages > 1 && (
+        <div className="mt-2 flex items-center justify-between px-1 pt-1">
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}
+            className="rounded-lg border border-pressed px-2 py-0.5 text-[10px] text-body hover:text-ink disabled:opacity-40">Prev</button>
+          <span className="font-mono text-[9px] text-mute">{page}/{totalPages}</span>
+          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
+            className="rounded-lg border border-pressed px-2 py-0.5 text-[10px] text-body hover:text-ink disabled:opacity-40">Next</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Statuses that imply the agent has worked (or is working) the task — show a
+// step log for these. It's "live" (polled + a pulsing badge) while in progress.
+const WORKED_STATUSES = ["in_progress", "blocked", "review", "done"];
+
+// A live view of what the agent is doing on this task: its recent steps (the
+// task-scoped activity the loop logs per tool call) plus, while it's actively
+// running, a "working now" badge from the worker's duty state. Poll-based
+// (matches the rest of the board); no backend change — both feeds already exist.
+function TaskActivity({ agentId, task, onTrace }: {
+  agentId: string; task: TaskT;
+  onTrace?: (sessionId: string, runId?: string) => void;
+}) {
+  const [acts, setActs] = useState<ActivityT[]>([]);
+  const [duty, setDuty] = useState<Duty | null>(null);
+  const inProgress = task.status === "in_progress";
+
+  const load = useCallback(async () => {
+    try {
+      const a = await apiJson<{ activities: ActivityT[] }>(
+        `/api/agents/${encodeURIComponent(agentId)}/activity?task=${encodeURIComponent(task.id)}&limit=12`);
+      setActs(a.activities);
+      if (inProgress) {
+        setDuty(await apiJson<Duty>(`/api/agents/${encodeURIComponent(agentId)}/duty`));
+      }
+    } catch { /* */ }
+  }, [agentId, task.id, inProgress]);
+
+  // Poll only while in progress (live); otherwise load the log once.
+  useEffect(() => {
+    load();
+    if (!inProgress) return;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [load, inProgress]);
+
+  const liveNow = inProgress && duty?.dutyStatus === "working" && duty?.current?.taskId === task.id;
+  const label = liveNow ? "Agent working now" : inProgress ? "In progress — worker idle" : "Work log";
+
+  return (
+    <div className="mt-3 rounded-xl border border-line bg-softer p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className={`h-2 w-2 rounded-full ${liveNow ? "animate-pulse bg-success" : inProgress ? "bg-warn" : "bg-mute"}`} />
+        <p className="text-[10px] font-extrabold uppercase tracking-wide text-mute">{label}</p>
+        {liveNow && <span className="ml-auto font-mono text-[9px] text-success">● live</span>}
+      </div>
+      {acts.length === 0 ? (
+        <p className="text-xs text-mute">{liveNow ? "Starting…" : "No steps recorded for this task yet."}</p>
+      ) : (
+        <div className="space-y-px">
+          {acts.map((a) => (
+            <div key={a.id} className="flex items-start gap-2 rounded-lg px-1.5 py-1.5 hover:bg-soft">
+              <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full font-mono text-[10px] ${
+                a.type === "error" ? "bg-danger-soft text-danger" : "bg-soft text-body"
+              }`} title={a.type}>{ACTIVITY_GLYPH[a.type] || "·"}</span>
+              <span className="min-w-0 flex-1 text-xs text-body">{a.summary}</span>
+              {onTrace && a.detail?.debugRunId && a.detail?.debugSessionId && (
+                <button onClick={() => onTrace(a.detail!.debugSessionId as string, a.detail!.debugRunId as string)}
+                  title="Open this step's LLM-call trace in Debug"
+                  className="shrink-0 rounded-full px-1 py-0.5 font-mono text-[9px] text-mute hover:text-primary-deep hover:underline">🔎</button>
+              )}
+              <span className="shrink-0 font-mono text-[9px] text-mute">{ago(a.createdAt)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskDetail({ agentId, task, onClose, onMove, onDelete, onChanged, onTrace }: {
   agentId: string; task: TaskT; onClose: () => void; onMove: (id: string, s: string) => void;
   onDelete: (id: string) => void; onChanged: () => void;
+  onTrace?: (sessionId: string, runId?: string) => void;
 }) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [text, setText] = useState("");
@@ -259,11 +402,21 @@ function TaskDetail({ agentId, task, onClose, onMove, onDelete, onChanged }: {
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {task.description && <p className="whitespace-pre-wrap text-sm text-body">{task.description}</p>}
+          {task.criteria && (
+            <div className="mt-3 rounded-xl border border-primary-line bg-primary-soft p-3">
+              <p className="text-[10px] font-extrabold uppercase tracking-wide text-primary-deep">Definition of done</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-primary-deep">{task.criteria}</p>
+            </div>
+          )}
           {task.resultSummary && (
             <div className="mt-3 rounded-xl bg-softer p-3">
               <p className="text-[10px] font-extrabold uppercase tracking-wide text-mute">Result summary</p>
               <p className="mt-1 text-sm text-ink">{task.resultSummary}</p>
             </div>
+          )}
+
+          {WORKED_STATUSES.includes(task.status) && (
+            <TaskActivity agentId={agentId} task={task} onTrace={onTrace} />
           )}
 
           <div className="mt-4">
@@ -318,7 +471,10 @@ const ACTIVITY_GLYPH: Record<string, string> = {
 
 const ACTIVITY_PAGE = 50;
 
-export function ActivityView({ agentId }: { agentId: string }) {
+export function ActivityView({ agentId, onTrace }: {
+  agentId: string;
+  onTrace?: (sessionId: string, runId?: string) => void;
+}) {
   const [acts, setActs] = useState<ActivityT[]>([]);
   const [limit, setLimit] = useState(ACTIVITY_PAGE);
   const load = useCallback(async () => {
@@ -350,6 +506,13 @@ export function ActivityView({ agentId }: { agentId: string }) {
                   a.type === "error" ? "bg-danger-soft text-danger" : a.type === "review_resolved" ? "bg-success-soft text-success" : "bg-soft text-body"
                 }`} title={a.type}>{ACTIVITY_GLYPH[a.type] || "·"}</span>
                 <span className="min-w-0 flex-1 text-sm text-body">{a.summary}</span>
+                {onTrace && a.detail?.debugRunId && a.detail?.debugSessionId && (
+                  <button
+                    onClick={() => onTrace(a.detail!.debugSessionId as string, a.detail!.debugRunId as string)}
+                    title="Open this step's LLM-call trace in Debug"
+                    className="shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[10px] text-mute underline-offset-2 hover:text-primary-deep hover:underline"
+                  >🔎 trace</button>
+                )}
                 <span className="shrink-0 font-mono text-[10px] text-mute">{ago(a.createdAt)}</span>
               </div>
             ))}
@@ -363,6 +526,47 @@ export function ActivityView({ agentId }: { agentId: string }) {
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Conversations — chat sessions this agent ran, newest first
+// --------------------------------------------------------------------------- //
+
+interface ConvT { id: string; title: string; model: string | null; updatedAt: string; messageCount: number }
+
+export function ConversationsView({ agentId, onOpenSession }: {
+  agentId: string;
+  onOpenSession?: (sessionId: string) => void;
+}) {
+  const [convs, setConvs] = useState<ConvT[]>([]);
+  const load = useCallback(async () => {
+    try { setConvs((await apiJson<{ sessions: ConvT[] }>(`/api/sessions?agentId=${encodeURIComponent(agentId)}`)).sessions); }
+    catch { /* */ }
+  }, [agentId]);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div>
+      <div className="mb-3 flex items-baseline justify-between">
+        <h3 className="text-[11px] font-extrabold uppercase tracking-wide text-mute">Conversations</h3>
+        {convs.length > 0 && <span className="font-mono text-[10px] text-mute">{convs.length} chat{convs.length === 1 ? "" : "s"}</span>}
+      </div>
+      {convs.length === 0 ? (
+        <p className="text-sm text-mute">No conversations yet. Chats you run as this agent show up here — open one to pick up where you left off.</p>
+      ) : (
+        <div className="space-y-px">
+          {convs.map((c) => (
+            <button key={c.id} onClick={() => onOpenSession?.(c.id)}
+              className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-soft">
+              <span className="min-w-0 flex-1 truncate text-sm text-body">{c.title || "Untitled chat"}</span>
+              <span className="shrink-0 font-mono text-[10px] text-mute">{c.messageCount} msg</span>
+              <span className="shrink-0 font-mono text-[10px] text-mute">{ago(c.updatedAt)}</span>
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -391,11 +595,12 @@ const DELIVERY_CHANNELS = [
   { kind: "in_app", label: "Chat thread", needsTarget: true, placeholder: "chat session id / alias (e.g. daily-summary)" },
   { kind: "desktop", label: "Desktop notification", needsTarget: false, placeholder: "" },
   { kind: "webhook", label: "Webhook", needsTarget: true, placeholder: "https://your-automation/hook" },
-  { kind: "email", label: "Email", needsTarget: true, placeholder: "name@example.com (must be allow-listed in Settings → Email)" },
+  { kind: "email", label: "Email", needsTarget: true, placeholder: "name@example.com (allow-listed in Settings → Email)" },
   { kind: "chat", label: "Chat channel", needsTarget: true, placeholder: "<channel account id>:<phone or chat id>" },
+  { kind: "obsidian", label: "Obsidian vault", needsTarget: true, placeholder: "/path/to/vault (local folder)" },
 ] as const;
 const CHANNEL_LABEL: Record<string, string> = {
-  in_app: "Chat", desktop: "Desktop", webhook: "Webhook", email: "Email", chat: "Chat channel",
+  in_app: "Chat", desktop: "Desktop", webhook: "Webhook", obsidian: "Obsidian",
 };
 
 const REPEATS = [
@@ -413,8 +618,14 @@ function fmtWhen(iso: string | null): string {
   return iso.slice(0, 16).replace("T", " ");
 }
 
-export function ScheduleView({ agentId }: { agentId: string }) {
+const SCHEDULE_PAGE_SIZE = 6;   // schedule cards shown before paginating
+
+export function ScheduleView({ agentId, onTrace }: {
+  agentId: string;
+  onTrace?: (sessionId: string, runId?: string) => void;  // open the schedule's runs in Debug
+}) {
   const [rows, setRows] = useState<ScheduleT[]>([]);
+  const [page, setPage] = useState(1);
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [repeat, setRepeat] = useState<(typeof REPEATS)[number]["id"]>("daily");
@@ -521,6 +732,13 @@ export function ScheduleView({ agentId }: { agentId: string }) {
     load();
   };
 
+  // Client-side pagination, mirroring the board columns. Clamp when the list
+  // shrinks (a delete, or switching agent) so we never strand an empty page.
+  const totalPages = Math.max(1, Math.ceil(rows.length / SCHEDULE_PAGE_SIZE));
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  useEffect(() => { setPage(1); }, [agentId]);
+  const pageRows = rows.slice((page - 1) * SCHEDULE_PAGE_SIZE, page * SCHEDULE_PAGE_SIZE);
+
   return (
     <div className="mx-auto max-w-3xl">
       {/* Create */}
@@ -573,7 +791,7 @@ export function ScheduleView({ agentId }: { agentId: string }) {
                     <input className={`${inputCls} h-8 flex-1 py-1 text-xs`} value={delTarget[c.kind] || ""} placeholder={c.placeholder}
                       onChange={(e) => setDelTarget((t) => ({ ...t, [c.kind]: e.target.value }))} />
                   )}
-                  {delOn[c.kind] && (c.kind === "webhook" || c.kind === "email" || c.kind === "chat") && (
+                  {delOn[c.kind] && c.kind === "webhook" && (
                     <span className="text-[10px] text-warn">data leaves your machine</span>
                   )}
                 </div>
@@ -588,7 +806,7 @@ export function ScheduleView({ agentId }: { agentId: string }) {
       {/* List */}
       <div className="mt-4 space-y-2">
         {rows.length === 0 && <p className="px-1 py-6 text-center text-sm text-mute">No schedules yet.</p>}
-        {rows.map((s) => (
+        {pageRows.map((s) => (
           <div key={s.id} className="rounded-2xl border border-line bg-canvas p-3.5 shadow-[0_14px_40px_-30px_rgba(40,51,92,0.4)]">
             <div className="flex items-center gap-2">
               <button onClick={() => toggle(s)} title={s.enabled ? "Disable" : "Enable"}
@@ -598,6 +816,13 @@ export function ScheduleView({ agentId }: { agentId: string }) {
                 {s.cronText || (s.runAt ? `Once · ${fmtWhen(s.runAt)}` : s.kind)}
               </span>
               <div className="ml-auto flex shrink-0 items-center gap-1">
+                {onTrace && s.runCount > 0 && (
+                  <button onClick={() => onTrace(`schedule:${s.id}`)}
+                    title="Open this schedule's runs in the Debug tab to trace every step (model calls, tool calls)"
+                    className="rounded-full border border-pressed px-2.5 py-1 text-[11px] font-medium text-body hover:bg-soft hover:text-ink">
+                    Trace in Debug
+                  </button>
+                )}
                 <button onClick={() => runNow(s)} disabled={running.has(s.id)}
                   className="rounded-full border border-pressed px-2.5 py-1 text-[11px] font-medium text-body hover:bg-soft hover:text-ink disabled:opacity-60">
                   {running.has(s.id) ? "Running…" : "Run now"}
@@ -649,6 +874,15 @@ export function ScheduleView({ agentId }: { agentId: string }) {
             )}
           </div>
         ))}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-3 pt-1">
+            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}
+              className="rounded-lg border border-pressed px-2 py-0.5 text-[10px] text-body hover:text-ink disabled:opacity-40">Prev</button>
+            <span className="font-mono text-[9px] text-mute">{page}/{totalPages} · {rows.length} schedules</span>
+            <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
+              className="rounded-lg border border-pressed px-2 py-0.5 text-[10px] text-body hover:text-ink disabled:opacity-40">Next</button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -817,6 +1051,89 @@ export function TriggersView({ agentId }: { agentId: string }) {
                   <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-xl bg-panel p-2.5 font-mono text-[10.5px] text-panel-ink">{t.lastError || t.lastResult}</pre>
                 )}
               </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Inbox — flow-back from other agents' handoffs (task_closed events)
+// --------------------------------------------------------------------------- //
+
+const INBOX_STATUS_CLS: Record<string, string> = {
+  pending: "bg-soft text-body",
+  processing: "bg-soft text-body",
+  processed: "bg-success-soft text-success",
+  failed: "bg-danger-soft text-danger",
+  dismissed: "bg-soft text-mute",
+};
+
+export function InboxView({ agentId }: { agentId: string }) {
+  const [rows, setRows] = useState<InboxItem[]>([]);
+  const [busy, setBusy] = useState<Set<string>>(new Set());
+
+  const load = useCallback(async () => {
+    try { setRows((await apiJson<{ items: InboxItem[] }>(`/api/agents/${encodeURIComponent(agentId)}/inbox`)).items); }
+    catch { /* */ }
+  }, [agentId]);
+  useEffect(() => { load(); }, [load]);
+  // Light poll so a handoff that lands while this tab is open shows up without a manual refresh.
+  useEffect(() => {
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const retry = async (item: InboxItem) => {
+    setBusy((b) => new Set(b).add(item.id));
+    try { await apiPost(`/api/agents/${encodeURIComponent(agentId)}/inbox/${item.id}/retry`, {}); }
+    catch { /* */ }
+    finally {
+      setBusy((b) => { const n = new Set(b); n.delete(item.id); return n; });
+      load();
+    }
+  };
+  const dismiss = async (item: InboxItem) => {
+    setBusy((b) => new Set(b).add(item.id));
+    try { await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/inbox/${item.id}`, { method: "DELETE" }); }
+    catch { /* */ }
+    finally {
+      setBusy((b) => { const n = new Set(b); n.delete(item.id); return n; });
+      load();
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl">
+      <div className="space-y-2">
+        {rows.length === 0 && <p className="px-1 py-6 text-center text-sm text-mute">No inbox items.</p>}
+        {rows.map((item) => (
+          <div key={item.id} className="rounded-2xl border border-line bg-canvas p-3.5 shadow-[0_14px_40px_-30px_rgba(40,51,92,0.4)]">
+            <div className="flex items-center gap-2">
+              <span className={`shrink-0 rounded-full px-2.5 py-0.5 font-mono text-[10px] ${INBOX_STATUS_CLS[item.status] || "bg-soft text-body"}`}>
+                {item.status}
+              </span>
+              <span className="truncate text-sm font-semibold text-ink">{item.payload.title}</span>
+              <span className="shrink-0 text-[11px] text-mute">from {item.payload.fromAgentName}</span>
+              <div className="ml-auto flex shrink-0 items-center gap-1">
+                <span className="text-[10px] text-mute">{fmtWhen(item.createdAt)}</span>
+                <button onClick={() => retry(item)} disabled={busy.has(item.id)}
+                  className="rounded-full border border-pressed px-2.5 py-1 text-[11px] font-medium text-body hover:bg-soft hover:text-ink disabled:opacity-60">
+                  {busy.has(item.id) ? "Working…" : "Retry"}
+                </button>
+                <button onClick={() => dismiss(item)} disabled={busy.has(item.id)}
+                  className="rounded-full border border-pressed px-2 py-1 text-[11px] text-mute hover:bg-soft hover:text-ink disabled:opacity-60">
+                  Dismiss
+                </button>
+              </div>
+            </div>
+            {item.payload.resultHead && (
+              <p className="mt-1.5 line-clamp-2 pl-[2px] text-xs text-mute">{item.payload.resultHead}</p>
+            )}
+            {item.lastError && (
+              <p className="mt-1.5 pl-[2px] text-[11px] text-danger">{item.lastError}</p>
             )}
           </div>
         ))}

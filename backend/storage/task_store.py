@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from storage import _sqlite
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -37,7 +38,7 @@ def _now() -> str:
 def _conn() -> sqlite3.Connection:
     p = db_path()
     ensure_dir(p.parent)
-    conn = sqlite3.connect(str(p))
+    conn = _sqlite.connect(str(p))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
@@ -70,6 +71,12 @@ def _conn() -> sqlite3.Connection:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id)")
+    # Guarded migration: definition of done — the acceptance criteria the agent
+    # must satisfy before a task can be marked done (checked by the Verify pillar).
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "criteria" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN criteria TEXT")
+    conn.mark_initialized()
     return conn
 
 
@@ -79,6 +86,7 @@ def _row(r: sqlite3.Row) -> dict:
         "agentId": r["agent_id"],
         "title": r["title"],
         "description": r["description"] or "",
+        "criteria": (r["criteria"] if "criteria" in r.keys() else None) or "",
         "status": r["status"],
         "priority": r["priority"],
         "orderKey": r["order_key"],
@@ -115,11 +123,12 @@ def create(agent_id: str, data: dict, origin: str = "mentor") -> dict:
             (agent_id, status)).fetchone()
         order_key = (row["m"] or 0) - 1.0
         conn.execute(
-            "INSERT INTO tasks (id, agent_id, title, description, status, priority, order_key, "
+            "INSERT INTO tasks (id, agent_id, title, description, criteria, status, priority, order_key, "
             "origin, result_summary, metadata, due_at, started_at, completed_at, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (task_id, agent_id, (data.get("title") or "Untitled task").strip(),
-             (data.get("description") or "").strip(), status, priority, order_key,
+             (data.get("description") or "").strip(), (data.get("criteria") or "").strip() or None,
+             status, priority, order_key,
              origin if origin in ("mentor", "intern", "agent") else "mentor",
              (data.get("resultSummary") or "").strip() or None,
              json.dumps(data.get("metadata") or {}), data.get("dueAt") or None,
@@ -162,6 +171,8 @@ def update(agent_id: str, task_id: str, data: dict) -> dict | None:
         setf("title", data["title"].strip())
     if "description" in data:
         setf("description", (data["description"] or "").strip())
+    if "criteria" in data:
+        setf("criteria", (data["criteria"] or "").strip() or None)
     if "priority" in data and data["priority"] in PRIORITIES:
         setf("priority", data["priority"])
     if "orderKey" in data and data["orderKey"] is not None:

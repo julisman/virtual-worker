@@ -28,6 +28,7 @@ class ToolIn(BaseModel):
     method: str | None = None
     url: str | None = None
     headers: dict[str, str] | None = None
+    fixedParams: dict | None = None       # constant args the operator pins (not model-supplied)
     allowPrivate: bool | None = None
     timeout: int | None = None
     enabled: bool | None = None

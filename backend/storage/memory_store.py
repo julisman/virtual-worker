@@ -10,6 +10,7 @@ leaving your machine. Stored locally only — like everything else in Virtual Wo
 from __future__ import annotations
 
 import sqlite3
+from storage import _sqlite
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -26,21 +27,25 @@ def _now() -> str:
 def _conn() -> sqlite3.Connection:
     p = db_path()
     ensure_dir(p.parent)
-    conn = sqlite3.connect(str(p))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS agent_memory (
-            id TEXT PRIMARY KEY,
-            agent_id TEXT NOT NULL,
-            content TEXT NOT NULL,
-            tags TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_memory_agent ON agent_memory(agent_id)")
-    return conn
+    conn = _sqlite.connect(str(p))
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_memory (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                tags TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_memory_agent ON agent_memory(agent_id)")
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 
 def _row(r: sqlite3.Row) -> dict:

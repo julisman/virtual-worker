@@ -21,6 +21,7 @@ interface Overview {
     backend: string | null; modelName: string | null; quant: string | null; ctx: number | null;
     port: number | null; error: string | null;
   };
+  searxng: { managed: boolean; installed: boolean; running: boolean; port: number | null };
   api: { runs: number; errors: number; sessions: number; tokens: number; cost: number };
   host: { os: string; arch: string; python: string; upstreamUrl: string };
   now: string;
@@ -159,6 +160,15 @@ export function MonitoringPage() {
             <span className="hidden items-center gap-1.5 rounded-full bg-success-soft px-3 py-1.5 text-xs font-medium text-success sm:inline-flex">
               <span className="inline-block h-2 w-2 rounded-full bg-success" />
               {rt?.modelName ?? "no model"} · {rt?.backend ?? "engine"}
+            </span>
+          )}
+          {ov?.searxng?.installed && (
+            <span title={`Managed SearXNG (web search)${ov.searxng.port ? ` · :${ov.searxng.port}` : ""}`}
+              className={`hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium sm:inline-flex ${
+                ov.searxng.running ? "bg-success-soft text-success" : "bg-soft text-mute"
+              }`}>
+              <span className={`inline-block h-2 w-2 rounded-full ${ov.searxng.running ? "bg-success" : "bg-mute"}`} />
+              Search {ov.searxng.running ? "up" : "down"}
             </span>
           )}
           <button

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from storage import _sqlite
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -29,7 +30,7 @@ _lock = threading.Lock()
 
 _SECRETS_KEY = "deliveryTargetSecrets"
 
-KINDS = ("in_app", "desktop", "webhook", "email", "slack", "telegram")
+KINDS = ("in_app", "desktop", "webhook", "email", "chat", "obsidian")
 STATUSES = ("sent", "failed", "queued", "dropped")
 
 
@@ -40,7 +41,7 @@ def _now() -> str:
 def _conn() -> sqlite3.Connection:
     p = db_path()
     ensure_dir(p.parent)
-    conn = sqlite3.connect(str(p))
+    conn = _sqlite.connect(str(p))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
@@ -73,6 +74,7 @@ def _conn() -> sqlite3.Connection:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_agent ON deliveries(agent_id, ts)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_schedule ON deliveries(schedule_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status)")
+    conn.mark_initialized()
     return conn
 
 
@@ -143,54 +145,6 @@ def delete_channel(channel_id: str) -> bool:
         deleted = cur.rowcount > 0
     set_secrets(channel_id, None)
     return deleted
-
-
-# --------------------------------------------------------------------------- #
-# Write-only secrets (settings.json, never the DB, never echoed back)
-# --------------------------------------------------------------------------- #
-
-def get_secrets(channel_id: str) -> dict:
-    allv = settings.get(_SECRETS_KEY) or {}
-    v = allv.get(channel_id) if isinstance(allv, dict) else None
-    return dict(v) if isinstance(v, dict) else {}
-
-
-def set_secrets(channel_id: str, values: dict | None) -> None:
-    allv = settings.get(_SECRETS_KEY) or {}
-    if not isinstance(allv, dict):
-        allv = {}
-    if values is None:
-        allv.pop(channel_id, None)
-    else:
-        cur = dict(allv.get(channel_id) or {})
-        for k, v in values.items():
-            if v is None or v == "":
-                cur.pop(k, None)
-            else:
-                cur[k] = str(v)
-        allv[channel_id] = cur
-    settings.set(_SECRETS_KEY, allv or None)
-
-
-def secret_flags(channel_id: str) -> dict:
-    cur = get_secrets(channel_id)
-    return {f"has{k[0].upper()}{k[1:]}": bool(v) for k, v in cur.items()}
-
-
-def email_target_for(address: str) -> dict | None:
-    """The first *enabled* email target whose ``allowTo`` list permits
-    ``address`` (exact address, or ``@domain``). None → refuse to send."""
-    addr = (address or "").strip().lower()
-    if "@" not in addr:
-        return None
-    domain = "@" + addr.rsplit("@", 1)[1]
-    for c in list_channels():
-        if c["kind"] != "email" or not c["enabled"]:
-            continue
-        allow = [str(x).strip().lower() for x in (c["config"].get("allowTo") or []) if str(x).strip()]
-        if addr in allow or domain in allow or "*" in allow:
-            return c
-    return None
 
 
 def webhook_allowlist() -> set[str]:
@@ -272,6 +226,31 @@ def get_delivery(delivery_id: str) -> dict | None:
     return _del_row(r) if r else None
 
 
+def delivery_health(agent_id: str, channel: str, *, window: int = 50) -> dict:
+    """Recent send health for one ``agent_id`` + ``channel`` — for surfacing
+    'is this channel actually working?' in a status UI (the socket can be up while
+    every send fails). Looks at the most recent ``window`` attempts (newest-first).
+
+    Returns ``{lastSentAt, lastFailedAt, lastError, failuresSinceSuccess}``.
+    ``failuresSinceSuccess > 0`` means something is broken *right now* (every
+    attempt since the last success failed)."""
+    rows = list_deliveries(agent_id=agent_id, channel=channel, limit=max(1, window))
+    last_sent = next((r for r in rows if r["status"] == "sent"), None)
+    last_failed = next((r for r in rows if r["status"] in ("failed", "dropped")), None)
+    fails_since = 0
+    for r in rows:                    # newest-first: count failures up to the last success
+        if r["status"] == "sent":
+            break
+        if r["status"] in ("failed", "dropped"):
+            fails_since += 1
+    return {
+        "lastSentAt": last_sent["ts"] if last_sent else None,
+        "lastFailedAt": last_failed["ts"] if last_failed else None,
+        "lastError": last_failed["error"] if last_failed else None,
+        "failuresSinceSuccess": fails_since,
+    }
+
+
 def list_deliveries(*, agent_id: str | None = None, schedule_id: str | None = None,
                     channel: str | None = None, status: str | None = None,
                     source: str | None = None, limit: int = 200) -> list[dict]:
@@ -292,6 +271,54 @@ def list_deliveries(*, agent_id: str | None = None, schedule_id: str | None = No
     with _conn() as conn:
         rows = conn.execute(q, args).fetchall()
     return [_del_row(r) for r in rows]
+
+
+# --------------------------------------------------------------------------- #
+# Write-only secrets (settings file, never the DB, never echoed back)
+# --------------------------------------------------------------------------- #
+
+def get_secrets(channel_id: str) -> dict:
+    allv = settings.get(_SECRETS_KEY) or {}
+    v = allv.get(channel_id) if isinstance(allv, dict) else None
+    return dict(v) if isinstance(v, dict) else {}
+
+
+def set_secrets(channel_id: str, values: dict | None) -> None:
+    allv = settings.get(_SECRETS_KEY) or {}
+    if not isinstance(allv, dict):
+        allv = {}
+    if values is None:
+        allv.pop(channel_id, None)
+    else:
+        cur = dict(allv.get(channel_id) or {})
+        for k, v in values.items():
+            if v is None or v == "":
+                cur.pop(k, None)
+            else:
+                cur[k] = str(v)
+        allv[channel_id] = cur
+    settings.set(_SECRETS_KEY, allv or None)
+
+
+def secret_flags(channel_id: str) -> dict:
+    cur = get_secrets(channel_id)
+    return {f"has{k[0].upper()}{k[1:]}": bool(v) for k, v in cur.items()}
+
+
+def email_target_for(address: str) -> dict | None:
+    """The first *enabled* email target whose ``allowTo`` list permits
+    ``address`` (exact address, or ``@domain``). None → refuse to send."""
+    addr = (address or "").strip().lower()
+    if "@" not in addr:
+        return None
+    domain = "@" + addr.rsplit("@", 1)[1]
+    for c in list_channels():
+        if c["kind"] != "email" or not c["enabled"]:
+            continue
+        allow = [str(x).strip().lower() for x in (c["config"].get("allowTo") or []) if str(x).strip()]
+        if addr in allow or domain in allow or "*" in allow:
+            return c
+    return None
 
 
 def prune_deliveries(older_than_iso: str) -> int:

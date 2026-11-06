@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { apiJson, apiPost } from "@/lib/api";
 import { BackupCard } from "./backup-card";
 import { EmailCard } from "./email-card";
+import { BrowserCard } from "./browser-card";
+import { VisionHelperCard } from "./vision-helper-card";
 import { TeamSettings } from "@/features/team/team-settings";
 
 interface Engine {
@@ -68,7 +70,7 @@ export function SettingsPage() {
     <div className="flex h-full min-w-0 flex-col bg-base">
       <div className="flex items-center gap-3 border-b border-pressed bg-softer px-6 py-3">
         <h1 className="font-display text-lg font-semibold tracking-tight text-ink">Settings</h1>
-        <span className="ml-auto font-mono text-[10px] text-mute">Local-first · update checks reach PyPI / Homebrew</span>
+        <span className="ml-auto font-mono text-[10px] text-mute">Local-first · update checks reach PyPI / Homebrew / GitHub</span>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-6">
@@ -114,7 +116,12 @@ export function SettingsPage() {
                           </div>
                         )}
                       </div>
-                      {e.updateAvailable ? (
+                      {!e.available && e.canUpdate ? (
+                        <button onClick={() => update(e.key)} disabled={busy}
+                          className="flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-medium text-white shadow-[0_8px_18px_-8px_rgba(43,60,130,0.7)] transition-colors hover:bg-primary-deep disabled:opacity-40">
+                          {busy ? <><Spinner /> Installing…</> : "Install"}
+                        </button>
+                      ) : e.updateAvailable ? (
                         <button onClick={() => update(e.key)} disabled={busy || !e.canUpdate}
                           className="flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-medium text-white shadow-[0_8px_18px_-8px_rgba(43,60,130,0.7)] transition-colors hover:bg-primary-deep disabled:opacity-40">
                           {busy ? <><Spinner /> Updating…</> : "Update"}
@@ -134,7 +141,7 @@ export function SettingsPage() {
                   {res && (
                     <div className="mt-3 border-t border-line pt-3">
                       <p className={`text-xs font-medium ${res.ok ? "text-success" : "text-danger"}`}>
-                        {res.ok ? `✓ Updated${res.installed ? ` to ${res.installed}` : ""}` : "✕ Update failed"}
+                        {res.ok ? `✓ Done${res.installed ? ` — now at ${res.installed}` : ""}` : "✕ Failed"}
                       </p>
                       <pre className="mt-2 max-h-48 overflow-auto rounded-xl bg-softer p-3 font-mono text-[10px] leading-relaxed text-body whitespace-pre-wrap">{res.output}</pre>
                     </div>
@@ -149,8 +156,12 @@ export function SettingsPage() {
             a model that's currently running keeps its loaded version until you re-activate it.
           </p>
 
+          <BrowserCard />
           <EmailCard />
           <BackupCard />
+          <VisionHelperCard />
+          {/* Global PRD-31 metrics config (review loop, default reviewer, cost
+              cap) — also reachable via the ⚙ shortcut on Analytics → Efficiency. */}
           <TeamSettings />
         </div>
       </div>

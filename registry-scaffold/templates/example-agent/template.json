@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 2,
+  "sourceId": "example-team-registry",
+  "templateId": "example-agent",
+  "name": "Example Operations Agent",
+  "description": "A deployable starter agent for the team registry.",
+  "category": "Operations",
+  "role": "Operations assistant",
+  "persona": "You help the operations team investigate runbooks and answer questions using the configured tools.",
+  "model": "local",
+  "temperature": 0.2,
+  "skills": ["incident-triage", "runbook-search"],
+  "guardrails": {"maxIterations": 12},
+  "variables": [
+    {
+      "key": "team-pat",
+      "label": "Team access token",
+      "type": "secret",
+      "required": true,
+      "help": "Enter this credential locally; it is never committed to the registry."
+    },
+    {
+      "key": "team-name",
+      "label": "Team name",
+      "type": "text",
+      "required": true,
+      "help": "The team this agent supports."
+    }
+  ],
+  "starterTasks": [
+    {"title": "Find the latest runbook", "description": "Search the team runbook for a topic."}
+  ],
+  "version": "1.0.0",
+  "requiresFeatures": ["connectors", "customTools"],
+  "metadata": {"owner": "{{TEAM_NAME}}"},
+  "customTools": [
+    {
+      "key": "runbook-search",
+      "name": "Runbook search",
+      "description": "Search the team's runbook service.",
+      "transport": "http",
+      "method": "GET",
+      "url": "https://runbook.example.invalid/search",
+      "headers": {"Authorization": "Bearer {{team-pat}}"},
+      "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+      "fixedParams": {},
+      "timeout": 20,
+      "allowPrivate": false
+    }
+  ],
+  "connectors": [
+    {
+      "name": "Team Confluence",
+      "preset": "confluence",
+      "overrides": {},
+      "secretBindings": {"pat": "team-pat"}
+    }
+  ]
+}

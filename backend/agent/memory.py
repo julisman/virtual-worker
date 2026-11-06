@@ -36,6 +36,7 @@ def build_memory_context(agent_id: str) -> str:
              "recall older notes not shown here.",
              ""]
     used = 0
+    shown = 0
     total = memory_store.count(agent_id)
     for n in notes:
         tag = f" [{n['tags']}]" if n["tags"] else ""
@@ -44,7 +45,7 @@ def build_memory_context(agent_id: str) -> str:
             break
         lines.append(entry)
         used += len(entry)
-    shown = len(lines) - 4  # minus header lines
+        shown += 1
     if total > shown:
         lines.append(f"\n_({total - shown} older note(s) not shown — use memory_search.)_")
     return "\n".join(lines)
@@ -75,6 +76,7 @@ def make_memory_tools(agent_id: str) -> dict[str, dict]:
     return {
         "memory_write": {
             "fn": memory_write,
+            "kind": "memory",
             "schema": {
                 "type": "function",
                 "function": {
@@ -95,6 +97,8 @@ def make_memory_tools(agent_id: str) -> dict[str, dict]:
         },
         "memory_search": {
             "fn": memory_search,
+            "parallel_safe": True,
+            "kind": "memory",
             "schema": {
                 "type": "function",
                 "function": {
@@ -105,6 +109,7 @@ def make_memory_tools(agent_id: str) -> dict[str, dict]:
                         "type": "object",
                         "properties": {
                             "query": {"type": "string", "description": "words to look for"},
+                            "limit": {"type": "integer", "description": "max notes to return (default 20)"},
                         },
                         "required": ["query"],
                     },
@@ -113,6 +118,7 @@ def make_memory_tools(agent_id: str) -> dict[str, dict]:
         },
         "memory_forget": {
             "fn": memory_forget,
+            "kind": "memory",
             "schema": {
                 "type": "function",
                 "function": {

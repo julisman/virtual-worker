@@ -22,9 +22,9 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from agent import loop, verify
-from agent.compose import compose
-from gateway.models import resolve_model
+from agent import verify
+from agent.inbox import flow_back_if_closed
+from gateway.providers import resolve_target
 from storage import activity_store, agent_store, task_store
 
 logger = logging.getLogger(__name__)
@@ -37,10 +37,15 @@ _WORKER_DIRECTIVE = (
     "You are working AUTONOMOUSLY on exactly one assigned task — no human will "
     "approve your steps. Use your tools (files, shell, web, memory, task_*) to "
     "complete it. Work inside your working folder. When the task is finished, call "
-    "task_update with status='done' and a clear result_summary. If you truly "
-    "cannot proceed, call task_update with status='blocked' and a note saying why. "
-    "Be decisive and finish within this session. Your finished work is checked by a "
-    "reviewer before it's accepted, so make sure it is actually complete and correct."
+    "task_update with status='done'. The ONLY output anyone receives from this run "
+    "is the result_summary you pass to task_update — your final chat message text is "
+    "discarded and seen by no one. So the result_summary must BE the complete "
+    "deliverable: the full answer or report (with any references), written out in "
+    "full. Never make it a recap, a status note, or a pointer like 'see below' or "
+    "'details in the chat'. If you truly cannot proceed, call task_update with "
+    "status='blocked' and a note saying why. Be decisive and finish within this "
+    "session. Your finished work is checked by a reviewer before it's accepted, so "
+    "make sure it is actually complete and correct."
 )
 
 
@@ -93,7 +98,11 @@ class WorkerManager:
     def _bump_passes(self, agent_id: str) -> int:
         p = self._passes.get(agent_id)
         if not p or p["day"] != _today():
-            p = {"day": _today(), "n": 0}
+            # Cold counter (fresh process or new day): recover today's count from
+            # the persisted activity feed so a backend restart doesn't hand the
+            # intern a fresh daily budget. A pass logs one `task_claimed`.
+            prior = activity_store.count_for(agent_id, day=_today(), type="task_claimed")
+            p = {"day": _today(), "n": prior}
         p["n"] += 1
         self._passes[agent_id] = p
         return p["n"]
@@ -105,19 +114,21 @@ class WorkerManager:
                 if not agent or (agent.get("dutyStatus") or "off") == "off":
                     return
 
-                daily_cap = (agent.get("guardrails") or {}).get("dailyCap", MAX_PASSES_PER_DAY)
-                if self._bump_passes(agent_id) > daily_cap:
-                    agent_store.update_agent(agent_id, {"dutyStatus": "paused"})
-                    activity_store.log(agent_id, "status_change",
-                                       f"Paused — hit the daily cap of {daily_cap} passes.")
-                    return
-
                 task = task_store.next_todo(agent_id)
                 if not task:
                     self._current[agent_id] = None
                     agent_store.update_agent(agent_id, {"dutyStatus": "idle"})
                     await asyncio.sleep(IDLE_BACKOFF_S)
                     continue
+
+                # A pass = one real task execution; idle polls (above) don't count,
+                # so the daily cap bounds tasks worked per day, not time on duty.
+                daily_cap = (agent.get("guardrails") or {}).get("dailyCap", MAX_PASSES_PER_DAY)
+                if self._bump_passes(agent_id) > daily_cap:
+                    agent_store.update_agent(agent_id, {"dutyStatus": "paused"})
+                    activity_store.log(agent_id, "status_change",
+                                       f"Paused — hit the daily cap of {daily_cap} tasks.")
+                    return
 
                 await self._work_one(agent, task)
         except asyncio.CancelledError:
@@ -141,56 +152,87 @@ class WorkerManager:
         activity_store.log(agent_id, "task_claimed", f"Picked up: {task['title']}", task_id=task_id)
 
         try:
-            model = agent.get("model") or await resolve_model(None)
-        except Exception as exc:  # noqa: BLE001
-            model = None
-            logger.debug("resolve_model failed: %s", exc)
-        if not model:
-            task_store.update(agent_id, task_id, {"status": "blocked"})
-            task_store.add_comment(task_id, "intern", "No active model — activate one in Models, then set me on duty.")
-            activity_store.log(agent_id, "error", "No active model; task blocked.", task_id=task_id)
-            await asyncio.sleep(ERROR_BACKOFF_S)
-            return
+            try:
+                model, target = await resolve_target(agent)
+            except Exception as exc:  # noqa: BLE001
+                # A transient provider/upstream hiccup must not park the task as
+                # blocked with a misleading "No active model" — put it back in todo
+                # and retry after the backoff (the daily pass cap bounds retries).
+                logger.warning("resolve_target failed for %s: %s", agent_id, exc)
+                task_store.update(agent_id, task_id, {"status": "todo"})
+                task_store.add_comment(task_id, "intern",
+                                       f"Model resolution failed ({str(exc)[:200]}) — will retry.")
+                activity_store.log(agent_id, "error",
+                                   f"Model resolution failed; will retry: {str(exc)[:160]}",
+                                   task_id=task_id)
+                await asyncio.sleep(ERROR_BACKOFF_S)
+                return
+            # A BYOK / subscription agent runs on a remote provider (target is set),
+            # so it doesn't need a local active model — only block the local path.
+            if not model and target is None:
+                task_store.update(agent_id, task_id, {"status": "blocked"})
+                task_store.add_comment(task_id, "intern", "No active model — activate one in Models, then set me on duty.")
+                activity_store.log(agent_id, "error", "No active model; task blocked.", task_id=task_id)
+                await asyncio.sleep(ERROR_BACKOFF_S)
+                return
 
-        guardrails = agent.get("guardrails") or {}
-        system, registry, temperature, top_p, top_k = compose(agent, extra_system=_WORKER_DIRECTIVE)
-        messages = [{
-            "role": "user",
-            "content": (f"Work this task now.\n\nTitle: {task['title']}\n"
-                        f"Task id: {task_id}\n\n{task.get('description') or '(no description)'}"),
-        }]
+            guardrails = agent.get("guardrails") or {}
+            content = (f"Work this task now.\n\nTitle: {task['title']}\n"
+                       f"Task id: {task_id}\n\n{task.get('description') or '(no description)'}")
+            if task.get("criteria"):
+                content += ("\n\nDefinition of done — you MUST satisfy every one of these before "
+                            f"marking the task done:\n{task['criteria']}")
 
-        err = None
-        try:
-            async for ev in loop.run(messages, model, registry, temperature,
-                                     session_id=f"worker:{agent_id}", system=system,
-                                     top_p=top_p, top_k=top_k, agent_id=agent_id, task_id=task_id,
-                                     max_iterations=guardrails.get("maxIterations")):
-                if ev.get("type") == "error":
-                    err = ev.get("message")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            err = str(exc)
+            err = None
+            trace: dict = {}  # {debugRunId, debugSessionId} — the pass's Debug trace, for deep-linking
+            try:
+                # Shared runner: it composes + wires the agent's MCP servers + drives
+                # the loop. Pass the already-resolved (model, target) so it isn't
+                # resolved twice, and task_id so activity/verify tie to this task.
+                from agent.runner import stream_run
+                # Thread the task's persisted delegation chain (if it was assigned by
+                # another agent) so assign_to can refuse a cross-run A→B→A loop.
+                _chain = (task.get("metadata") or {}).get("delegationChain") or None
+                async for ev in stream_run(
+                    agent, [{"role": "user", "content": content}],
+                    session_id=f"worker:{agent_id}", extra_system=_WORKER_DIRECTIVE,
+                    task_id=task_id, resolved=(model, target),
+                    delegation_chain=tuple(_chain) if _chain else None,
+                ):
+                    if ev.get("runId"):
+                        trace = {"debugRunId": ev["runId"], "debugSessionId": ev.get("sessionId")}
+                    if ev.get("type") == "error":
+                        err = ev.get("message")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                err = str(exc)
 
-        # Reconcile: the agent should have closed the task itself. If it didn't,
-        # park it so it isn't silently stuck and won't be re-pulled.
-        after = task_store.get(agent_id, task_id)
-        if err:
-            task_store.update(agent_id, task_id, {"status": "blocked"})
-            task_store.add_comment(task_id, "intern", f"Hit an error: {err[:300]}")
-            activity_store.log(agent_id, "error", f"Task errored: {err[:200]}", task_id=task_id)
-            await asyncio.sleep(ERROR_BACKOFF_S)
-        elif after and after["status"] == "in_progress":
-            task_store.update(agent_id, task_id, {"status": "blocked"})
-            task_store.add_comment(task_id, "intern", "Finished a work pass without closing the task — needs attention.")
-            activity_store.log(agent_id, "task_moved", f"{task['title']}: parked (not closed)", task_id=task_id,
-                               detail={"from": "in_progress", "to": "blocked"})
-        elif after and after["status"] == "done" and guardrails.get("verify", True):
-            # Verify pillar — don't take the agent's word for it (unless disabled).
-            await self._verify(agent_id, model, after)
+            # Reconcile: the agent should have closed the task itself. If it didn't,
+            # park it so it isn't silently stuck and won't be re-pulled.
+            after = task_store.get(agent_id, task_id)
+            if err:
+                task_store.update(agent_id, task_id, {"status": "blocked"})
+                task_store.add_comment(task_id, "intern", f"Hit an error: {err[:300]}")
+                activity_store.log(agent_id, "error", f"Task errored: {err[:200]}", task_id=task_id, detail=trace or None)
+                await asyncio.sleep(ERROR_BACKOFF_S)
+            elif after and after["status"] == "in_progress":
+                task_store.update(agent_id, task_id, {"status": "blocked"})
+                task_store.add_comment(task_id, "intern", "Finished a work pass without closing the task — needs attention.")
+                activity_store.log(agent_id, "task_moved", f"{task['title']}: parked (not closed)", task_id=task_id,
+                                   detail={"from": "in_progress", "to": "blocked", **trace})
+            elif after and after["status"] == "done" and guardrails.get("verify", True):
+                # Verify pillar — don't take the agent's word for it (unless disabled).
+                await self._verify(agent_id, model, after, target)
+        finally:
+            await self._finalize(agent_id, task_id)
 
-    async def _verify(self, agent_id: str, model: str, task: dict) -> None:
+    async def _finalize(self, agent_id: str, task_id: str) -> None:
+        """Queue one flow-back item after a delegated task reaches a final state."""
+        flow_back_if_closed(agent_id, task_id)
+
+    async def _verify(self, agent_id: str, model: str, task: dict,
+                      target: dict | None = None) -> None:
         """Closing pillar: confirm a 'done' task really is done, or send it back."""
         task_id = task["id"]
         if verify.attempts(task) >= verify.MAX_VERIFY_ATTEMPTS:
@@ -200,7 +242,7 @@ class WorkerManager:
             return
         recent = activity_store.list_for(agent_id, task_id=task_id, limit=12)
         context = "Recent actions:\n" + "\n".join(f"- {a['type']}: {a['summary']}" for a in reversed(recent))
-        ok, reason = await verify.verify_task(model, task, context=context)
+        ok, reason = await verify.verify_task(model, task, context=context, provider=target)
         if ok:
             activity_store.log(agent_id, "verify", f"Verified: {task['title']} — {reason}", task_id=task_id)
         else:

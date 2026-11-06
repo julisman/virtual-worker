@@ -67,3 +67,18 @@ def test_memory_tools(store):
 def test_memory_write_requires_content(store):
     tools = mem.make_memory_tools("a1")
     assert "needs" in asyncio.run(tools["memory_write"]["fn"](content="  "))
+
+
+def test_context_has_no_footer_when_everything_is_shown(store):
+    for i in range(3):
+        store.add("a1", f"fact {i}")
+    ctx = mem.build_memory_context("a1")
+    assert "older note(s) not shown" not in ctx  # all 3 shown -> no phantom footer
+
+
+def test_context_footer_counts_hidden_notes_exactly(store, monkeypatch):
+    monkeypatch.setattr(mem, "MAX_INJECTED_NOTES", 2)
+    for i in range(3):
+        store.add("a1", f"fact {i}")
+    ctx = mem.build_memory_context("a1")
+    assert "(1 older note(s) not shown" in ctx

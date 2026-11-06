@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# claude-run — launch Claude Code headless in the background so a Virtual Worker agent can
+# start a long coding run, return immediately, and poll it across turns.
+#
+# Why this exists: the Virtual Worker `shell` tool caps every command at 60s and runs with
+# shell=False (no `&`, no `>`, no `&&`). A real Claude Code run takes minutes, so
+# the agent can't just call `claude -p "..."` and wait. This wrapper detaches the
+# run (nohup, own log, stdin closed) so the caller's 60s shell returns at once,
+# then exposes `status` / `tail` for the agent to poll on later turns.
+#
+# Install: put this file on the PATH of the machine Virtual Worker runs on, e.g.
+#   install -m 755 claude-run /usr/local/bin/claude-run
+# Runs are stored under $CLAUDE_RUN_DIR (default: <cwd>/.claude-runs). The agent's
+# cwd is pinned to its working folder = the repo, so runs land next to the code.
+# Add `.claude-runs/` to the repo's .gitignore.
+#
+# Env:
+#   CLAUDE_RUN_FLAGS  flags passed to `claude` (default: autonomous, no prompts)
+#   CLAUDE_RUN_DIR    where job dirs live   (default: $PWD/.claude-runs)
+set -euo pipefail
+
+RUN_ROOT="${CLAUDE_RUN_DIR:-$PWD/.claude-runs}"
+# Autonomous, non-interactive: -p prints and exits; skip-permissions because no
+# human is at the keyboard to approve edits. Tighten per your risk appetite.
+FLAGS="${CLAUDE_RUN_FLAGS:---dangerously-skip-permissions}"
+
+cmd="${1:-}"; shift || true
+
+_jobdir() {
+  local job="${1:-}"
+  [ -n "$job" ] || { echo "need a <job> id (see: claude-run list)" >&2; exit 2; }
+  local dir="$RUN_ROOT/$job"
+  [ -d "$dir" ] || { echo "no such job: $job" >&2; exit 1; }
+  printf '%s' "$dir"
+}
+
+case "$cmd" in
+  start)
+    prompt="${1:-}"
+    [ -n "$prompt" ] || { echo 'usage: claude-run start "<prompt>"' >&2; exit 2; }
+    ts="$(date +%Y%m%d-%H%M%S)"
+    job="${ts}-$$"
+    dir="$RUN_ROOT/$job"
+    mkdir -p "$dir"
+    printf '%s\n' "$prompt" > "$dir/prompt"
+    printf '%s\n' "$PWD"    > "$dir/cwd"
+    # Detach fully: log captures stdout+stderr, stdin is /dev/null, and the
+    # caller's fds are redirected away — so when this script exits the Virtual Worker shell
+    # sees EOF immediately instead of blocking on the child's pipe for minutes.
+    nohup bash -c '
+      claude -p "$1" '"$FLAGS"' > "$2/log" 2>&1
+      echo $? > "$2/exit"
+    ' _ "$prompt" "$dir" </dev/null >/dev/null 2>&1 &
+    echo $! > "$dir/pid"
+    echo "started job $job"
+    echo "log: $dir/log"
+    echo "poll: claude-run status $job   |   claude-run tail $job"
+    ;;
+
+  status)
+    dir="$(_jobdir "${1:-}")"
+    if [ -f "$dir/exit" ]; then
+      code="$(cat "$dir/exit")"
+      if [ "$code" = "0" ]; then echo "done (exit 0)"; else echo "failed (exit $code)"; fi
+    elif kill -0 "$(cat "$dir/pid" 2>/dev/null)" 2>/dev/null; then
+      echo "running"
+    else
+      echo "stopped (process died with no exit code — check the log)"
+    fi
+    ;;
+
+  tail)
+    dir="$(_jobdir "${1:-}")"
+    n="${2:-40}"
+    tail -n "$n" "$dir/log" 2>/dev/null || echo "(no log yet)"
+    ;;
+
+  log)
+    dir="$(_jobdir "${1:-}")"
+    cat "$dir/log" 2>/dev/null || echo "(no log yet)"
+    ;;
+
+  list)
+    [ -d "$RUN_ROOT" ] || { echo "(no runs yet)"; exit 0; }
+    for d in "$RUN_ROOT"/*/; do
+      [ -d "$d" ] || continue
+      job="$(basename "$d")"
+      st="$("$0" status "$job" 2>/dev/null || echo '?')"
+      printf '%-24s %s\n' "$job" "$st"
+    done
+    ;;
+
+  *)
+    echo "usage: claude-run {start \"<prompt>\"|status <job>|tail <job> [n]|log <job>|list}" >&2
+    exit 2
+    ;;
+esac

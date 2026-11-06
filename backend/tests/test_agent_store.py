@@ -35,6 +35,49 @@ def test_create_and_get(store):
     assert got["persona"] == "You research things."
 
 
+def test_web_search_defaults_and_persists(store):
+    # Default is SearXNG with empty key/url (falls back to the global env at run time).
+    assert store.get_default_agent()["webSearch"] == {
+        "provider": "searxng", "apiKey": "", "searxngUrl": ""}
+    a = store.create_agent({"name": "S", "webSearch": {"provider": "tavily", "apiKey": " k "}})
+    assert a["webSearch"]["provider"] == "tavily"
+    assert a["webSearch"]["apiKey"] == "k"          # trimmed
+    # Partial update merges over existing (key preserved when only provider changes).
+    upd = store.update_agent(a["id"], {"webSearch": {"provider": "brave"}})
+    assert upd["webSearch"]["provider"] == "brave" and upd["webSearch"]["apiKey"] == "k"
+    # Unknown provider falls back to searxng.
+    b = store.create_agent({"name": "B", "webSearch": {"provider": "bogus"}})
+    assert b["webSearch"]["provider"] == "searxng"
+
+
+def test_wikis_attachment_persists(store):
+    assert store.get_default_agent()["wikis"] == []
+    a = store.create_agent({"name": "W", "wikis": ["wiki123"]})
+    assert a["wikis"] == ["wiki123"]
+    upd = store.update_agent(a["id"], {"persona": "changed"})
+    assert upd["wikis"] == ["wiki123"]        # untouched on unrelated update
+
+
+def test_model_source_defaults_and_persists(store):
+    # Default agent + a plain create both default to the local source.
+    assert store.get_default_agent()["modelSource"] == "local"
+    a = store.create_agent({"name": "Ext", "modelSource": "byok",
+                            "provider": "deepseek", "model": "deepseek-chat"})
+    assert a["modelSource"] == "byok"
+    assert a["provider"] == "deepseek"
+    assert a["model"] == "deepseek-chat"
+    # Switching back to local clears the stale external model id (model=None).
+    back = store.update_agent(a["id"], {"modelSource": "local", "provider": "", "model": None})
+    assert back["modelSource"] == "local"
+    assert back["provider"] == ""
+    assert back["model"] is None
+
+
+def test_model_source_invalid_coerced_to_local(store):
+    a = store.create_agent({"name": "Y", "modelSource": "bogus"})
+    assert a["modelSource"] == "local"
+
+
 def test_update_partial(store):
     a = store.create_agent({"name": "X", "tools": ["web_search"]})
     updated = store.update_agent(a["id"], {"persona": "new persona"})
@@ -69,3 +112,41 @@ def test_default_agent_falls_back_when_assistant_deleted(store):
     other = store.create_agent({"name": "Other"})
     store.delete_agent(store.DEFAULT_AGENT_ID)
     assert store.get_default_agent()["id"] == other["id"]
+
+
+# ─── connectorGrants + askBudget ─────────────────────────────────────────────
+
+def test_connector_grants_default_empty(store):
+    a = store.create_agent({"name": "A"})
+    assert a["connectorGrants"] == {}
+    assert store.get_agent(a["id"])["connectorGrants"] == {}
+
+
+def test_connector_grants_persist_and_normalize(store):
+    a = store.create_agent({"name": "A", "connectorGrants": {
+        "gitlab": {"write": True, "merge": True},
+        "jira": {"write": True},          # merge fills to False
+        "bad": "nope",                     # non-dict dropped
+    }})
+    assert a["connectorGrants"] == {
+        "gitlab": {"write": True, "merge": True},
+        "jira": {"write": True, "merge": False},
+    }
+    # preserved on a partial update, replaced when supplied
+    upd = store.update_agent(a["id"], {"description": "x"})
+    assert upd["connectorGrants"]["gitlab"] == {"write": True, "merge": True}
+    upd = store.update_agent(a["id"], {"connectorGrants": {"gitlab": {"write": True}}})
+    assert upd["connectorGrants"] == {"gitlab": {"write": True, "merge": False}}
+
+
+def test_ask_budget_default_none_and_clamped(store):
+    a = store.create_agent({"name": "A"})
+    assert a["askBudget"] is None
+    a = store.create_agent({"name": "B", "askBudget": 5})
+    assert a["askBudget"] == 5
+    assert store.create_agent({"name": "C", "askBudget": 99})["askBudget"] == 20
+    assert store.create_agent({"name": "D", "askBudget": -3})["askBudget"] == 0
+    assert store.create_agent({"name": "E", "askBudget": "nope"})["askBudget"] is None
+    # preserved on partial update
+    upd = store.update_agent(a["id"], {"description": "x"})
+    assert upd["askBudget"] == 5

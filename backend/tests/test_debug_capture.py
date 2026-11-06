@@ -66,6 +66,19 @@ def test_streaming_chat_capture(db, monkeypatch):
     assert tool["toolArgs"] == {"city": "Jakarta"}  # reassembled across SSE chunks
 
 
+def test_run_records_agent_id_for_filtering(db):
+    db.insert_run({
+        "run_id": "r1", "session_id": "chat-1", "agent_id": "agent-x",
+        "start_time": "2026-06-26T10:00:00+00:00", "end_time": "2026-06-26T10:00:01+00:00",
+        "method": "POST", "endpoint": "/api/chat", "provider": "openai", "model": "gpt-5.4",
+        "status_code": 200, "created_at": "2026-06-26T10:00:00+00:00",
+    }, [])
+    sessions = db.list_sessions()
+    assert len(sessions) == 1
+    assert sessions[0]["agentId"] == "agent-x"  # surfaced so the UI can filter by agent
+    assert sessions[0]["provider"] == "openai"
+
+
 def test_error_capture(db):
     import middleware.api_debug as api_debug
     importlib.reload(api_debug)

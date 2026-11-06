@@ -16,3 +16,8 @@ data/
 
 # OS
 .DS_Store
+
+# Claude Code — personal, machine-local settings (not shared)
+.claude/settings.local.json
+# Local planning/scratch docs — never committed
+docs/scratchpad/

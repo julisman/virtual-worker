@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from storage import _sqlite
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -34,7 +35,7 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # Names an operator may not claim: the built-ins + per-agent self-tools the
 # harness always injects, plus the ``mcp__`` prefix reserved for MCP tools.
 RESERVED_NAMES = {
-    "web_search", "web_fetch",
+    "browser_search", "browser_fetch",
     "read_file", "write_file", "edit_file", "list_dir", "glob", "grep",
     "memory_write", "memory_search", "memory_forget",
     "schedule_create", "schedule_list", "schedule_cancel",
@@ -56,7 +57,7 @@ def _now() -> str:
 def _conn() -> sqlite3.Connection:
     p = db_path()
     ensure_dir(p.parent)
-    conn = sqlite3.connect(str(p))
+    conn = _sqlite.connect(str(p))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
@@ -72,10 +73,21 @@ def _conn() -> sqlite3.Connection:
             allow_private INTEGER NOT NULL DEFAULT 0,  -- opt-in: reach loopback/private hosts
             timeout INTEGER NOT NULL DEFAULT 20,
             enabled INTEGER NOT NULL DEFAULT 1,
+            fixed_params TEXT,      -- JSON object of constant args the operator pins (not model-supplied)
+            provenance TEXT,        -- JSON template ownership metadata
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
     """)
+    # Lightweight migration: add columns introduced after the table existed.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(custom_tools)").fetchall()}
+    if "fixed_params" not in cols:
+        conn.execute("ALTER TABLE custom_tools ADD COLUMN fixed_params TEXT")
+    # Guarded migration: template-owned tool lineage (PRD-29).  Provenance is
+    # deliberately non-secret and is used only for ownership/reconciliation.
+    if "provenance" not in cols:
+        conn.execute("ALTER TABLE custom_tools ADD COLUMN provenance TEXT")
+    conn.mark_initialized()
     return conn
 
 
@@ -92,6 +104,8 @@ def _row(r: sqlite3.Row) -> dict:
         "allowPrivate": bool(r["allow_private"]),
         "timeout": r["timeout"] if r["timeout"] is not None else 20,
         "enabled": bool(r["enabled"]),
+        "fixedParams": json.loads(r["fixed_params"]) if r["fixed_params"] else {},
+        "provenance": json.loads(r["provenance"]) if "provenance" in r.keys() and r["provenance"] else None,
         "createdAt": r["created_at"],
         "updatedAt": r["updated_at"],
     }
@@ -135,6 +149,24 @@ def _validate_schema(params) -> dict:
     return params
 
 
+def _validate_fixed(fixed) -> dict:
+    """Constant args the operator pins — always merged into the request, never
+    exposed to the model. Must be a flat JSON object of scalar values."""
+    if fixed in (None, ""):
+        return {}
+    if isinstance(fixed, str):
+        try:
+            fixed = json.loads(fixed)
+        except json.JSONDecodeError as exc:
+            raise ToolError(f"fixed parameters must be valid JSON: {exc}") from exc
+    if not isinstance(fixed, dict):
+        raise ToolError("fixed parameters must be a JSON object")
+    for k, v in fixed.items():
+        if not isinstance(v, (str, int, float, bool)) and v is not None:
+            raise ToolError(f"fixed parameter '{k}' must be a string, number, boolean, or null")
+    return fixed
+
+
 def _validate_method(method: str) -> str:
     method = (method or "GET").upper()
     if method not in ALLOWED_METHODS:
@@ -166,19 +198,21 @@ def create_tool(data: dict) -> dict:
     name = _validate_name(data.get("name"))
     schema = _validate_schema(data.get("parameters"))
     method = _validate_method(data.get("method") or "GET")
+    fixed = _validate_fixed(data.get("fixedParams"))
     now = _now()
     tid = data.get("id") or uuid.uuid4().hex[:12]
     with _lock, _conn() as conn:
         conn.execute(
             "INSERT INTO custom_tools (id, name, description, transport, parameters, method, "
-            "url, headers, allow_private, timeout, enabled, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "url, headers, allow_private, timeout, enabled, fixed_params, provenance, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (tid, name, data.get("description") or "", data.get("transport") or "http",
              json.dumps(schema), method, (data.get("url") or "").strip() or None,
              json.dumps(data.get("headers") or {}),
              1 if data.get("allowPrivate") else 0,
              int(data.get("timeout") or 20),
-             0 if data.get("enabled") is False else 1, now, now),
+             0 if data.get("enabled") is False else 1, json.dumps(fixed),
+             json.dumps(data.get("provenance")) if data.get("provenance") else None, now, now),
         )
     return get_tool(tid)  # type: ignore[return-value]
 
@@ -191,17 +225,20 @@ def update_tool(tool_id: str, data: dict) -> dict | None:
     name = _validate_name(merged.get("name"), existing_id=tool_id)
     schema = _validate_schema(merged.get("parameters"))
     method = _validate_method(merged.get("method") or "GET")
+    fixed = _validate_fixed(merged.get("fixedParams"))
     now = _now()
     with _lock, _conn() as conn:
         conn.execute(
             "UPDATE custom_tools SET name=?, description=?, transport=?, parameters=?, method=?, "
-            "url=?, headers=?, allow_private=?, timeout=?, enabled=?, updated_at=? WHERE id=?",
+            "url=?, headers=?, allow_private=?, timeout=?, enabled=?, fixed_params=?, provenance=?, updated_at=? WHERE id=?",
             (name, merged.get("description") or "", merged.get("transport") or "http",
              json.dumps(schema), method, (merged.get("url") or "").strip() or None,
              json.dumps(merged.get("headers") or {}),
              1 if merged.get("allowPrivate") else 0,
              int(merged.get("timeout") or 20),
-             0 if merged.get("enabled") is False else 1, now, tool_id),
+             0 if merged.get("enabled") is False else 1, json.dumps(fixed),
+             json.dumps(merged.get("provenance")) if merged.get("provenance") else None,
+             now, tool_id),
         )
     return get_tool(tool_id)
 

@@ -13,6 +13,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from agent.inbox import CLOSING_STATUSES, flow_back_if_closed
 from storage import activity_store, agent_store, task_store
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ router = APIRouter()
 class TaskIn(BaseModel):
     title: str | None = None
     description: str | None = None
+    criteria: str | None = None
     status: str | None = None
     priority: str | None = None
     orderKey: float | None = None
@@ -68,6 +70,8 @@ async def update_task(agent_id: str, task_id: str, body: TaskIn):
         activity_store.log(agent_id, "task_moved",
                            f"Mentor moved {t['title']}: {before['status']} → {body.status}",
                            task_id=task_id, detail={"from": before["status"], "to": body.status, "by": "mentor"})
+        if body.status in CLOSING_STATUSES:
+            flow_back_if_closed(agent_id, task_id)
     return t
 
 

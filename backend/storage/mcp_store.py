@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from storage import _sqlite
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -38,7 +39,7 @@ def slugify(name: str) -> str:
 def _conn() -> sqlite3.Connection:
     p = db_path()
     ensure_dir(p.parent)
-    conn = sqlite3.connect(str(p))
+    conn = _sqlite.connect(str(p))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
@@ -55,6 +56,13 @@ def _conn() -> sqlite3.Connection:
             updated_at TEXT NOT NULL
         )
     """)
+    # Guarded migration: optional per-server tool allowlist (JSON list of bare
+    # tool names). NULL/empty = expose every tool the server advertises — the
+    # pre-allowlist behavior, so existing configs are unaffected.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(mcp_servers)").fetchall()}
+    if "allowed_tools" not in cols:
+        conn.execute("ALTER TABLE mcp_servers ADD COLUMN allowed_tools TEXT")
+    conn.mark_initialized()
     return conn
 
 
@@ -68,6 +76,8 @@ def _row(r: sqlite3.Row) -> dict:
         "args": json.loads(r["args"]) if r["args"] else [],
         "env": json.loads(r["env"]) if r["env"] else {},
         "url": r["url"] or "",
+        "allowedTools": (json.loads(r["allowed_tools"])
+                         if "allowed_tools" in r.keys() and r["allowed_tools"] else []),
         "enabled": bool(r["enabled"]),
         "createdAt": r["created_at"],
         "updatedAt": r["updated_at"],
@@ -78,6 +88,13 @@ def list_servers() -> list[dict]:
     with _conn() as conn:
         rows = conn.execute("SELECT * FROM mcp_servers ORDER BY updated_at DESC").fetchall()
     return [_row(r) for r in rows]
+
+
+def _allowed(value) -> str | None:
+    """Normalize an allowedTools value for storage. Empty/absent → NULL (= no
+    filter, every advertised tool exposed)."""
+    names = [str(t).strip() for t in (value or []) if str(t).strip()]
+    return json.dumps(names) if names else None
 
 
 def get_server(server_id: str) -> dict | None:
@@ -91,12 +108,13 @@ def create_server(data: dict) -> dict:
     sid = data.get("id") or uuid.uuid4().hex[:12]
     with _lock, _conn() as conn:
         conn.execute(
-            "INSERT INTO mcp_servers (id, name, transport, command, args, env, url, enabled, "
-            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO mcp_servers (id, name, transport, command, args, env, url, "
+            "allowed_tools, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (sid, data.get("name") or "Untitled server",
              data.get("transport") or "stdio", data.get("command") or None,
              json.dumps(data.get("args") or []), json.dumps(data.get("env") or {}),
-             data.get("url") or None, 1 if data.get("enabled", True) else 0, now, now),
+             data.get("url") or None, _allowed(data.get("allowedTools")),
+             1 if data.get("enabled", True) else 0, now, now),
         )
     return get_server(sid)  # type: ignore[return-value]
 
@@ -110,10 +128,11 @@ def update_server(server_id: str, data: dict) -> dict | None:
     with _lock, _conn() as conn:
         conn.execute(
             "UPDATE mcp_servers SET name=?, transport=?, command=?, args=?, env=?, url=?, "
-            "enabled=?, updated_at=? WHERE id=?",
+            "allowed_tools=?, enabled=?, updated_at=? WHERE id=?",
             (merged["name"], merged.get("transport") or "stdio", merged.get("command") or None,
              json.dumps(merged.get("args") or []), json.dumps(merged.get("env") or {}),
-             merged.get("url") or None, 1 if merged.get("enabled", True) else 0, now, server_id),
+             merged.get("url") or None, _allowed(merged.get("allowedTools")),
+             1 if merged.get("enabled", True) else 0, now, server_id),
         )
     return get_server(server_id)
 

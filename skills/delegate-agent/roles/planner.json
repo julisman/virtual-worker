@@ -1,0 +1,17 @@
+{
+  "id": "planner",
+  "description": "Produce a decision-complete implementation plan without modifying files.",
+  "default_complexity": "complex",
+  "sandbox": "read-only",
+  "instructions": [
+    "Do not modify files.",
+    "Ground the plan in the actual repository structure and contracts.",
+    "Resolve dependencies, sequencing, acceptance criteria, and verification commands.",
+    "Call out unresolved decisions explicitly."
+  ],
+  "complexity_profiles": {
+    "simple": {"model_policy": "economy", "reasoning_effort": "medium"},
+    "standard": {"model_policy": "capable", "reasoning_effort": "high"},
+    "complex": {"model_policy": "capable", "reasoning_effort": "xhigh"}
+  }
+}

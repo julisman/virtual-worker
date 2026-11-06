@@ -26,8 +26,9 @@ def test_backend_inference():
 def test_mlx_args_shape(monkeypatch):
     import shutil as _sh
     monkeypatch.setattr(_sh, "which", lambda *_: "/opt/bin/mlx_lm.server")
-    args = mgr._mlx_args("/models/mlx-x", 8080, mgr.MLX_BIN, "mlx_lm.server")
-    assert args[0] == mgr.MLX_BIN  # console script resolved via PATH
+    import config
+    args = mgr._mlx_args("/models/mlx-x", 8080, config.mlx_bin(), "mlx_lm.server")
+    assert args[0] == config.mlx_bin()  # console script resolved via PATH
     assert "--model" in args and "/models/mlx-x" in args and "8080" in args
 
 
@@ -56,12 +57,9 @@ def test_status_reflects_verify_states(monkeypatch):
     monkeypatch.setattr(mgr, "_state", {**mgr._state, "pid": 123, "managed": True, "path": "/m.gguf"})
     monkeypatch.setattr(mgr, "_pid_alive", lambda pid: True)
 
-    async def healthy(*a, **k):
-        return True
-    async def aid(*a, **k):
-        return "m"
-    monkeypatch.setattr(mgr, "_healthy", healthy)
-    monkeypatch.setattr(mgr, "_active_model_id", aid)
+    async def probe(*a, **k):
+        return True, "m"
+    monkeypatch.setattr(mgr, "_probe", probe)
 
     # verifying: optimistic — a reachable server is ready, probe runs in background
     monkeypatch.setattr(mgr, "_verify", {"state": "verifying", "error": None, "path": "/m.gguf"})
@@ -144,7 +142,9 @@ def test_active_model_pref_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(mgr.config, "APP_HOME", tmp_path)
     assert mgr._load_pref() is None
     mgr._save_pref("/models/x.gguf", 4096, 99)
-    assert mgr._load_pref() == {"path": "/models/x.gguf", "ctx": 4096, "ngl": 99, "backend": "llamacpp", "adapter": None}
+    assert mgr._load_pref() == {"path": "/models/x.gguf", "ctx": 4096, "ngl": 99,
+                                "backend": "llamacpp", "adapter": None,
+                                "mtp": False, "mtpNMax": mgr._MTP_N_MAX_DEFAULT}
     # stored in the single settings file
     import json
     assert json.loads((tmp_path / "settings.json").read_text())["activeModel"]["ctx"] == 4096
@@ -190,10 +190,98 @@ def test_autostart_prefers_persisted_model(tmp_path, monkeypatch):
     monkeypatch.setattr(mgr, "_load_pref", lambda: {"path": str(model), "ctx": 16384, "ngl": 50})
 
     started = {}
-    async def fake_start(path, ctx=None, ngl=None, force=False, adapter=None):
+    async def fake_start(path, ctx=None, ngl=None, force=False, adapter=None, **kw):
         started.update(path=path, ctx=ctx, ngl=ngl)
         return {"running": True}
     monkeypatch.setattr(mgr, "start", fake_start)
 
     asyncio.run(mgr.adopt_or_autostart())
     assert started == {"path": str(model), "ctx": 16384, "ngl": 50}
+
+
+def test_verify_probes_the_started_model_not_the_first_listed(monkeypatch):
+    """mlx_vlm.server lists the whole HF cache (oldest first) on /v1/models and
+    treats an inbound `model` as a selector — probing data[0] made verify unload
+    the model we just started and load an unrelated one, then report 'ok'."""
+    _stub_verify_env(monkeypatch)
+    sent = {}
+
+    class FakeResp:
+        status_code = 200
+        text = "ok"
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def get(self, *a, **k):  # a stale model is listed first
+            raise AssertionError("verify must not ask /v1/models which model to probe")
+        async def post(self, url, json=None, **k):
+            sent.update(json or {})
+            return FakeResp()
+
+    monkeypatch.setattr(mgr.httpx, "AsyncClient", FakeClient)
+    asyncio.run(mgr._run_verify("/models/new-27b", 8080))
+    assert mgr._verify["state"] == "ok"
+    assert sent["model"] == "/models/new-27b"
+
+
+def test_active_model_id_prefers_started_path_over_v1_models(monkeypatch):
+    """Echoing back /v1/models[0] swaps the loaded model on mlx-vlm; callers
+    (verify, eval_runner) must get the path Virtual Worker actually started."""
+    monkeypatch.setattr(mgr, "_state", {**mgr._state, "path": "/models/new-27b"})
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def get(self, *a, **k):
+            raise AssertionError("should not query /v1/models when a path is known")
+
+    monkeypatch.setattr(mgr.httpx, "AsyncClient", FakeClient)
+    assert asyncio.run(mgr._active_model_id(8080)) == "/models/new-27b"
+
+
+def _capture_spawn_args(monkeypatch, tmp_path):
+    """Run mgr._spawn with Popen stubbed; return the argv it would exec."""
+    import subprocess
+    monkeypatch.setattr(mgr.config, "APP_HOME", tmp_path)
+    monkeypatch.setattr(mgr, "APP_HOME", tmp_path)
+    monkeypatch.setattr(mgr.shutil, "which", lambda *_: "/bin/llama-server")
+    captured = {}
+    class FakeProc:
+        pid = 4242
+    def fake_popen(args, **kw):
+        captured["args"] = args
+        return FakeProc()
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    return captured
+
+
+def test_spawn_adds_mtp_flags_for_llamacpp(tmp_path, monkeypatch):
+    cap = _capture_spawn_args(monkeypatch, tmp_path)
+    pid = mgr._spawn("/m/x.gguf", 8192, 99, 8080, "llamacpp", None, mtp=True, mtp_n_max=3)
+    assert pid == 4242
+    a = cap["args"]
+    assert "--spec-type" in a and a[a.index("--spec-type") + 1] == "draft-mtp"
+    assert "--model-draft" in a and a[a.index("--model-draft") + 1] == "/m/x.gguf"
+    assert a[a.index("--spec-draft-n-max") + 1] == "3"
+
+
+def test_spawn_clamps_mtp_n_max(tmp_path, monkeypatch):
+    cap = _capture_spawn_args(monkeypatch, tmp_path)
+    mgr._spawn("/m/x.gguf", 8192, 99, 8080, "llamacpp", None, mtp=True, mtp_n_max=999)
+    a = cap["args"]
+    assert a[a.index("--spec-draft-n-max") + 1] == str(mgr._MTP_N_MAX_MAX)
+
+
+def test_spawn_no_mtp_flags_when_disabled(tmp_path, monkeypatch):
+    cap = _capture_spawn_args(monkeypatch, tmp_path)
+    mgr._spawn("/m/x.gguf", 8192, 99, 8080, "llamacpp", None, mtp=False)
+    assert "--spec-type" not in cap["args"]

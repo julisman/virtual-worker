@@ -48,3 +48,18 @@ def test_delete(store):
     assert store.delete_server(s["id"]) is True
     assert store.get_server(s["id"]) is None
     assert store.delete_server("missing") is False
+
+
+def test_allowed_tools_round_trip_and_default(store):
+    # Absent → empty list out (= no filter), existing rows unaffected.
+    s = store.create_server({"name": "Plain", "command": "a"})
+    assert s["allowedTools"] == []
+    # Set, read back, then clear with an explicit empty list.
+    s2 = store.create_server({"name": "Doctor", "command": "npx",
+                              "allowedTools": ["shortlink_generate", " ", ""]})
+    assert s2["allowedTools"] == ["shortlink_generate"]
+    updated = store.update_server(s2["id"], {"allowedTools": []})
+    assert updated["allowedTools"] == []
+    # Update that doesn't mention allowedTools leaves it unchanged.
+    s3 = store.update_server(s["id"], {"name": "Plain2"})
+    assert s3["allowedTools"] == []

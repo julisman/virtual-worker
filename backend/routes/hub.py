@@ -36,6 +36,8 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from runtime import model_meta
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -161,10 +163,18 @@ def _cpu_info() -> tuple[int | None, str | None]:
 
 @router.get("/capability")
 async def capability():
-    ram = _total_ram_bytes()
-    vram, vram_note = _vram_bytes()
-    disk_free, disk_total = _disk_usage()
-    cpu_cores, cpu_brand = _cpu_info()
+    # These probe hardware via blocking subprocesses (nvidia-smi, sysctl) and
+    # disk stat — run them off the event loop so the endpoint doesn't stall other
+    # requests while it shells out.
+    def _probe():
+        ram = _total_ram_bytes()
+        vram, vram_note = _vram_bytes()
+        disk_free, disk_total = _disk_usage()
+        cpu_cores, cpu_brand = _cpu_info()
+        return ram, vram, vram_note, disk_free, disk_total, cpu_cores, cpu_brand
+
+    ram, vram, vram_note, disk_free, disk_total, cpu_cores, cpu_brand = \
+        await asyncio.to_thread(_probe)
     return {
         "os": platform.system(),
         "arch": platform.machine(),
@@ -393,6 +403,7 @@ def _scan_hf_cache() -> list[dict]:
                     size = f.stat().st_size  # follows symlink to the blob
                 except OSError:
                     size = None
+                ctx = model_meta.ctx_info(str(f), "llamacpp", size)
                 items.append({
                     "source": "hf-cache",
                     "backend": "llamacpp",
@@ -402,21 +413,37 @@ def _scan_hf_cache() -> list[dict]:
                     "sizeBytes": size,
                     "sizeGb": round(size / GIB, 2) if size else None,
                     "quant": _quant_label(f.name),
+                    "maxCtx": ctx["maxCtx"],
+                    "recommendedCtx": ctx["recommendedCtx"],
+                    "mtpCapable": ctx.get("mtpCapable", False),
                 })
     return items
 
 
-def _mlx_meta(rev: Path) -> tuple[str | None, bool]:
-    """(quant label, is_multimodal) from an MLX model's config.json. Multimodal
-    (vision/audio) MLX models need mlx-vlm — mlx_lm.server (text) can't run them."""
+def _mlx_meta(rev: Path) -> tuple[str | None, bool, bool]:
+    """(quant label, is_multimodal, is_text_generative) from an MLX model's
+    config.json. Multimodal (vision/audio) MLX models need mlx-vlm — mlx_lm.server
+    (text) can't run them. text_generative is True for chat/instruct LMs, which
+    answer a text prompt regardless of any vision/audio *input* head; it's False
+    only for dedicated audio (TTS/STT) or image-generation models, which can't
+    run a text eval suite. Modern chat VLMs (Qwen3.5, Gemma-4) declare a
+    vision_config yet are perfectly text-generative."""
     try:
         cfg = json.loads((rev / "config.json").read_text())
     except Exception:
-        return None, False
+        return None, False, False
     q = cfg.get("quantization") or {}
     quant = f"{q['bits']}-bit" if q.get("bits") else None
     multimodal = ("vision_config" in cfg) or ("audio_config" in cfg)
-    return quant, multimodal
+    archs = cfg.get("architectures") or []
+    is_lm_arch = any(
+        isinstance(a, str) and (a.endswith("ForCausalLM") or a.endswith("ForConditionalGeneration"))
+        for a in archs
+    )
+    # A plain text model has no vision/audio head; a chat VLM is an LM-arch with a
+    # text_config. Either way it answers text — only pure audio/image models don't.
+    text_generative = (not multimodal) or is_lm_arch or ("text_config" in cfg)
+    return quant, multimodal, text_generative
 
 
 def _mlx_repo_cached(repo: str) -> bool:
@@ -448,7 +475,8 @@ def _scan_mlx_cache() -> list[dict]:
                     size += f.stat().st_size
                 except OSError:
                     pass
-            quant, multimodal = _mlx_meta(rev)
+            quant, multimodal, text_generative = _mlx_meta(rev)
+            ctx = model_meta.ctx_info(str(rev), "mlx", size or None)
             items.append({
                 "source": "hf-cache",
                 "backend": "mlx",
@@ -459,13 +487,81 @@ def _scan_mlx_cache() -> list[dict]:
                 "sizeGb": round(size / GIB, 2) if size else None,
                 "quant": quant,
                 "multimodal": multimodal,
+                "textGenerative": text_generative,
+                "maxCtx": ctx["maxCtx"],
+                "recommendedCtx": ctx["recommendedCtx"],
             })
+    return items
+
+
+def _scan_fused_models() -> list[dict]:
+    """Fine-tuned models fused by the Train tab live under ``APP_HOME/models``
+    (one MLX model directory each) — not in the HF cache, so the cache scanners
+    miss them. Surface them in the on-device list with source "finetuned".
+    Loose ``*.gguf`` files there (fuses converted for llama.cpp serving) are
+    listed too, same as HF-cache GGUFs."""
+    from config import APP_HOME
+    base = APP_HOME / "models"
+    if not base.is_dir():
+        return []
+    items: list[dict] = []
+    for d in sorted(base.iterdir()):
+        if d.is_file() and d.suffix.lower() == ".gguf":
+            try:
+                size = d.stat().st_size
+            except OSError:
+                size = None
+            ctx = model_meta.ctx_info(str(d), "llamacpp", size)
+            items.append({
+                "source": "finetuned",
+                "backend": "llamacpp",
+                "repo": f"ves/{d.stem}",
+                "filename": d.name,
+                "path": str(d),
+                "sizeBytes": size,
+                "sizeGb": round(size / GIB, 2) if size else None,
+                "quant": _quant_label(d.name),
+                "maxCtx": ctx["maxCtx"],
+                "recommendedCtx": ctx["recommendedCtx"],
+                "mtpCapable": ctx.get("mtpCapable", False),
+            })
+            continue
+        safes = list(d.glob("*.safetensors")) if d.is_dir() else []
+        if not safes or not (d / "config.json").exists():
+            continue
+        size = 0
+        for f in safes:
+            try:
+                size += f.stat().st_size
+            except OSError:
+                pass
+        quant, multimodal, text_generative = _mlx_meta(d)
+        ctx = model_meta.ctx_info(str(d), "mlx", size or None)
+        items.append({
+            "source": "finetuned",
+            "backend": "mlx",
+            # Locally fine-tuned models live under the "ves/" author namespace —
+            # they were produced by this studio, not downloaded from a HF org.
+            "repo": f"ves/{d.name}",
+            "filename": d.name,
+            "path": str(d),
+            "sizeBytes": size or None,
+            "sizeGb": round(size / GIB, 2) if size else None,
+            "quant": quant,
+            "multimodal": multimodal,
+            "textGenerative": text_generative,
+            "maxCtx": ctx["maxCtx"],
+            "recommendedCtx": ctx["recommendedCtx"],
+        })
     return items
 
 
 @router.get("/local")
 async def local_models():
-    items = _scan_hf_cache() + _scan_mlx_cache()
+    # Scanning the HF + MLX caches walks the whole cache tree (blocking I/O) —
+    # run it off the event loop.
+    items = await asyncio.to_thread(
+        lambda: _scan_hf_cache() + _scan_mlx_cache() + _scan_fused_models())
     return {"models": items, "count": len(items)}
 
 
@@ -481,8 +577,13 @@ async def delete_local(req: DeleteRequest):
     path = Path(req.path)
     cache = str(hf_cache_dir())
     cache_r = hf_cache_dir().resolve()
+    # Deletable roots: the HF cache, and APP_HOME/models (fused fine-tunes).
+    from config import APP_HOME
+    fused_root = APP_HOME / "models"
+    in_cache = str(path).startswith(cache)
+    in_fused = str(path.resolve()).startswith(str(fused_root.resolve()) + os.sep)
     is_gguf = path.suffix.lower() == ".gguf"
-    if not str(path).startswith(cache) or not (is_gguf or path.is_dir()):
+    if not (in_cache or in_fused) or not (is_gguf or path.is_dir()):
         raise HTTPException(400, "path is not a cached model")
 
     # Don't pull the rug out from under a running model.
@@ -554,6 +655,21 @@ class DownloadJob:
 
 _JOBS: dict[str, DownloadJob] = {}
 _JOB_SEQ = 0
+
+
+def evict_finished_jobs(keep: int = 20) -> int:
+    """Drop all but the ``keep`` most-recent terminal (done/error/cancelled)
+    download jobs from the in-memory map so it doesn't grow unbounded on a
+    long-running backend. In-flight jobs are never evicted. Returns count removed."""
+    terminal = sorted(
+        ((jid, j) for jid, j in _JOBS.items()
+         if j.status in ("done", "error", "cancelled")),
+        key=lambda kv: kv[1].started, reverse=True)
+    removed = 0
+    for jid, _ in terminal[keep:]:
+        _JOBS.pop(jid, None)
+        removed += 1
+    return removed
 
 
 def _new_job_id() -> str:

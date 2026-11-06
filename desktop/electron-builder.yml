@@ -1,0 +1,75 @@
+appId: dev.virtualworker.app
+productName: Virtual Worker
+copyright: Copyright © 2026 Virtual Worker contributors
+
+# Always arch-label artifacts. electron-builder omits the suffix for x64 by
+# default (→ Virtual Worker-<ver>.dmg) but adds it for arm64 (→ Virtual Worker-<ver>-arm64.dmg), which
+# is confusing when shipping both. Force <name>-<version>-<arch>.<ext> so users
+# can tell the Apple Silicon and Intel installers apart at a glance.
+artifactName: ${productName}-${version}-${arch}.${ext}
+
+directories:
+  output: release          # built installers land in desktop/release/
+  buildResources: assets
+
+afterSign: assets/notarize.js   # notarizes when Apple creds are in the env (else skips)
+
+# The frozen backend, the built frontend, and the model engine ride along as
+# app resources (Contents/Resources/…). staged by build.sh into desktop/resources/.
+extraResources:
+  - from: resources/backend
+    to: backend
+  - from: resources/frontend
+    to: frontend
+  - from: resources/bin
+    to: bin
+
+files:
+  - main.js
+  - preload.js
+  - loading.html
+  - package.json
+
+mac:
+  category: public.app-category.developer-tools
+  icon: assets/icon.icns          # Virtual Worker otter (same mascot as the web app)
+  target:
+    # No fixed arch here on purpose: a CLI --arm64/--x64 flag is ADDITIVE to a
+    # config arch (it does NOT override `arch: [arm64]` — you'd get BOTH arches in
+    # one run, and the second gets packaged with the other arch's staged
+    # backend/engine). build.sh always passes exactly one --$arch (from
+    # VW_TARGET_ARCH), so each run builds a single arch matching what it froze.
+    # Run directly with no flag → host arch. For Intel: VW_TARGET_ARCH=x64
+    # desktop/build.sh (see build.sh header + README — x64 needs an x64 toolchain).
+    - target: dmg
+  # Signing + notarization are OFF unless the env provides an identity. With a
+  # Developer ID present, electron-builder signs; notarization runs when the
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID env vars are set
+  # (see afterSign hook / notarize.js). Hardened runtime + entitlements are
+  # required for notarization.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: assets/entitlements.mac.plist
+  entitlementsInherit: assets/entitlements.mac.plist
+
+dmg:
+  title: Virtual Worker ${version}
+  # Classic drag-to-Applications layout.
+  contents:
+    - x: 130
+      y: 220
+      type: file
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# Update feed — GitLab. electron-builder has no native GitLab provider, so we use
+# the `generic` provider pointed at GitLab's "latest release" permalink. Publish a
+# Release for each version with latest-mac.yml + the .dmg/.zip attached as asset
+# links (filepath /latest-mac.yml etc.) and they're reachable under this stable
+# URL (see desktop/README.md → "Publishing a GitLab release").
+publish:
+  provider: generic
+  url: https://github.com/virtual-worker
+  channel: latest

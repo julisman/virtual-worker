@@ -67,6 +67,31 @@ def test_desktop_channel_no_target_required(stores, monkeypatch):
     assert rec["status"] == "sent"
 
 
+# ─── obsidian vault export ────────────────────────────────────────────────────
+
+def test_obsidian_writes_markdown_note(stores, tmp_path):
+    delivery, channel_store, _, _ = stores
+    from storage import settings
+    vault = tmp_path / "vault"
+    settings.set("obsidianVault", str(vault))
+    rec = asyncio.run(delivery.deliver("obsidian", str(vault), "run output here",
+                                       subject="Skill Test Run", agent_id="a1"))
+    assert rec["status"] == "sent"
+    notes = list(vault.rglob("*.md"))
+    assert len(notes) == 1
+    body = notes[0].read_text()
+    assert "run output here" in body
+    assert "title: Skill Test Run" in body
+    assert channel_store.list_deliveries(agent_id="a1")[0]["status"] == "sent"
+
+
+def test_obsidian_requires_explicit_target(stores):
+    delivery, _, _, _ = stores
+    rec = asyncio.run(delivery.deliver("obsidian", "", "text"))
+    assert rec["status"] == "failed"
+    assert "explicit 'target'" in rec["error"]
+
+
 # ─── webhook opt-in / allow-list ─────────────────────────────────────────────
 
 def test_webhook_blocked_unless_allowlisted(stores):

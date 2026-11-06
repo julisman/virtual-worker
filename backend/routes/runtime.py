@@ -23,6 +23,8 @@ class StartRequest(BaseModel):
     ctx: int | None = None
     ngl: int | None = None
     force: bool = False        # take over the port from an existing llama-server
+    mtp: bool = False          # llama.cpp: self-speculate off the embedded MTP head
+    mtpNMax: int | None = None  # MTP draft depth (default 3)
 
 
 @router.get("/status")
@@ -33,7 +35,9 @@ async def status():
 @router.post("/start")
 async def start(req: StartRequest):
     try:
-        return await mgr.start(req.path, ctx=req.ctx, ngl=req.ngl, force=req.force)
+        kw = {} if req.mtpNMax is None else {"mtp_n_max": req.mtpNMax}
+        return await mgr.start(req.path, ctx=req.ctx, ngl=req.ngl, force=req.force,
+                               mtp=req.mtp, **kw)
     except FileNotFoundError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:

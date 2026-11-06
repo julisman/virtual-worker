@@ -4,6 +4,13 @@ import importlib
 
 import pytest
 
+from gateway.pricing import estimate_cost
+
+# The external call's cost is now computed authoritatively by insert_run from the
+# shared price table (callers can no longer supply it). tokens=50 → 25 in / 25 out.
+_EXTERNAL_MODEL = "claude-sonnet-5"
+_EXTERNAL_COST = estimate_cost(_EXTERNAL_MODEL, 25, 25)
+
 
 @pytest.fixture()
 def mods(tmp_path, monkeypatch):
@@ -46,9 +53,9 @@ def _seed(ddb):
     _run(ddb, "worker:agentA", "2026-06-20T10:00:00+00:00", tokens=100, tool_calls=2)
     _run(ddb, "worker:agentA", "2026-06-20T11:00:00+00:00", tokens=200, is_error=1)
     _run(ddb, "worker:agentA", "2026-06-21T09:00:00+00:00", tokens=150, tool_calls=1)
-    # A hosted/external call — anthropic, real cost.
+    # A hosted/external call — anthropic, real (computed) cost.
     _run(ddb, "anthropic:claude", "2026-06-20T12:00:00+00:00",
-         model="claude-3", provider="anthropic", tokens=50, cost=0.05)
+         model=_EXTERNAL_MODEL, provider="anthropic", tokens=50)
 
 
 def test_summary(mods):
@@ -59,7 +66,7 @@ def test_summary(mods):
     assert s["totalTokens"] == 500
     assert s["errors"] == 1
     assert s["errorRate"] == round(1 / 4, 4)
-    assert s["cost"] == 0.05
+    assert s["cost"] == _EXTERNAL_COST
     assert s["toolCalls"] == 3
     assert s["avgLatencyMs"] == 200
 
@@ -88,8 +95,8 @@ def test_breakdown_by_model(mods):
     _seed(ddb)
     rows = {r["key"]: r for r in adb.breakdown("model", "2026-06-20", "2026-06-21")}
     assert rows["local-qwen"]["calls"] == 3
-    assert rows["claude-3"]["calls"] == 1
-    assert rows["claude-3"]["cost"] == 0.05
+    assert rows[_EXTERNAL_MODEL]["calls"] == 1
+    assert rows[_EXTERNAL_MODEL]["cost"] == _EXTERNAL_COST
 
 
 def test_breakdown_by_provider(mods):
@@ -97,7 +104,7 @@ def test_breakdown_by_provider(mods):
     _seed(ddb)
     rows = {r["key"]: r for r in adb.breakdown("provider", "2026-06-20", "2026-06-21")}
     assert rows["local"]["calls"] == 3
-    assert rows["anthropic"]["cost"] == 0.05
+    assert rows["anthropic"]["cost"] == _EXTERNAL_COST
 
 
 def test_breakdown_bad_dimension(mods):

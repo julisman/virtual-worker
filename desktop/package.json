@@ -1,0 +1,21 @@
+{
+  "name": "ves-desktop",
+  "version": "0.2.10",
+  "description": "Virtual Worker — local-first LLM studio, packaged as a one-click desktop app.",
+  "author": "Virtual Worker contributors",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "@electron/notarize": "^2.3.2",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.2.1"
+  }
+}

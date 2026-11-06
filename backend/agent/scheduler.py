@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 from storage import activity_store, agent_store, schedule_store
 
@@ -35,7 +36,17 @@ _SCHEDULE_DIRECTIVE = (
 # --------------------------------------------------------------------------- #
 
 def make_schedule_tools(agent_id: str) -> dict[str, dict]:
-    """``{name: {schema, fn}}`` for schedule_create / schedule_list / schedule_delete."""
+    """``{name: {schema, fn}}`` for schedule_create / schedule_list / schedule_delete.
+
+    The prompt carries no clock (volatile text would break the cached prefix, and
+    a per-turn injection confused small local models), so these tool *results*
+    report "now" — the model learns the current time exactly when it schedules,
+    and tool results are never part of the cached prefix.
+    """
+
+    def _now() -> str:
+        now = datetime.now().astimezone()
+        return f"{now:%Y-%m-%d %H:%M} ({now:%A}, local time)"
 
     async def schedule_create(title: str = "", prompt: str = "",
                               cron: str = "", at: str = "") -> str:
@@ -51,17 +62,19 @@ def make_schedule_tools(agent_id: str) -> dict[str, dict]:
                 s = schedule_store.create(agent_id, title or prompt[:40], prompt,
                                           kind="at", run_at=at.strip())
             else:
-                return "Provide either 'cron' (e.g. '0 17 * * *' for 5pm daily) or 'at' (ISO datetime)."
+                return ("Provide either 'cron' (e.g. '0 17 * * *' for 5pm daily) or 'at' "
+                        f"(ISO datetime, e.g. '2026-06-29T15:00'). Now is {_now()}.")
         except ValueError as exc:
-            return f"could not create schedule: {exc}"
+            return f"could not create schedule: {exc}. Now is {_now()}."
         when = s["cronText"] or f"once at {s['runAt']}"
-        return f"scheduled '{s['title']}' — {when} (next run {s['nextRunAt']}). id={s['id']}"
+        return (f"scheduled '{s['title']}' — {when} (next run {s['nextRunAt']}; "
+                f"now is {_now()}). id={s['id']}")
 
     async def schedule_list() -> str:
         rows = schedule_store.list_for_agent(agent_id)
         if not rows:
-            return "no schedules yet."
-        out = []
+            return f"no schedules yet. Now is {_now()}."
+        out = [f"now: {_now()}"]
         for s in rows:
             when = s["cronText"] or f"once at {s['runAt']}"
             state = "on" if s["enabled"] else "off"
@@ -85,7 +98,9 @@ def make_schedule_tools(agent_id: str) -> dict[str, dict]:
                         "Schedule a prompt to run later — recurring with a cron expression, or "
                         "once at a specific time. The scheduled run executes with your tools; its "
                         "text is recorded but not auto-sent, so include a sending tool in 'prompt' "
-                        "if it must reach someone. Times use the computer's local time."
+                        "if it must reach someone. Times use the computer's local time. If you "
+                        "need the current date/time (e.g. to resolve 'tomorrow 9am' into 'at'), "
+                        "call schedule_list first — its result reports now."
                     ),
                     "parameters": {
                         "type": "object",
@@ -106,7 +121,8 @@ def make_schedule_tools(agent_id: str) -> dict[str, dict]:
                 "type": "function",
                 "function": {
                     "name": "schedule_list",
-                    "description": "List your scheduled runs with their timing, on/off state, and next run.",
+                    "description": ("List your scheduled runs with their timing, on/off state, and "
+                                    "next run. Also reports the current local date & time."),
                     "parameters": {"type": "object", "properties": {}},
                 },
             },
@@ -139,6 +155,9 @@ class SchedulerManager:
         self._task: asyncio.Task | None = None
         self._running = False
         self._inflight: set[str] = set()
+        # Retain fire tasks — asyncio only weak-refs a bare create_task(), so a
+        # mid-run fire could be garbage-collected and silently vanish.
+        self._tasks: set[asyncio.Task] = set()
 
     def start(self) -> None:
         if self._task and not self._task.done():
@@ -153,9 +172,26 @@ class SchedulerManager:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            except asyncio.CancelledError:
+                # Re-raise only when *we* are the one being cancelled (an outer
+                # shutdown deadline) — otherwise this is just the CancelledError
+                # from the tick task we deliberately cancelled, and swallowing it
+                # here must not eat the deadline (that's the old hang).
+                cur = asyncio.current_task()
+                if cur is not None and cur.cancelling():
+                    raise
+            except Exception:  # noqa: BLE001
                 pass
             self._task = None
+        # Bounded drain of in-flight fires: give them a moment to finish cleanly,
+        # then cancel the stragglers — _fire's finally still records the run, and
+        # shutdown never blocks indefinitely on an in-flight agent run.
+        if self._tasks:
+            _, pending = await asyncio.wait(set(self._tasks), timeout=3)
+            for t in pending:
+                t.cancel()
+            if pending:
+                await asyncio.wait(pending, timeout=2)
 
     async def _run(self) -> None:
         # Let startup (model adopt, etc.) settle before the first tick.
@@ -165,13 +201,19 @@ class SchedulerManager:
                 for s in schedule_store.list_due():
                     if s["id"] not in self._inflight:
                         self._inflight.add(s["id"])
-                        asyncio.create_task(self._fire(s))
+                        task = asyncio.create_task(self._fire(s))
+                        self._tasks.add(task)
+                        task.add_done_callback(self._tasks.discard)
             except Exception:  # noqa: BLE001
                 logger.warning("scheduler tick failed", exc_info=True)
             await asyncio.sleep(self._tick)
 
     async def run_now(self, schedule: dict) -> dict:
-        """Fire a schedule immediately (used by the 'Run now' button)."""
+        """Fire a schedule immediately (used by the 'Run now' button). If a
+        fire is already in flight (the background tick beat the click), don't
+        stack a duplicate concurrent run — return the current record as-is."""
+        if schedule["id"] in self._inflight:
+            return schedule_store.get(schedule["id"]) or schedule
         await self._fire(schedule)
         return schedule_store.get(schedule["id"]) or schedule
 
@@ -188,30 +230,27 @@ class SchedulerManager:
                 schedule_store.record_run(sid, "error", error="agent no longer exists")
                 return
 
-            # Lazy imports break the compose↔scheduler cycle.
-            from agent import loop
-            from agent.compose import compose
-            from gateway.models import resolve_model
-
-            model = agent.get("model") or await resolve_model(None)
-            system, registry, temperature, top_p, top_k = compose(agent, extra_system=_SCHEDULE_DIRECTIVE)
-            messages = [{"role": "user", "content": schedule["prompt"]}]
-            g = (agent.get("guardrails") or {})
+            # Lazy import breaks the compose↔scheduler cycle.
+            from agent.runner import stream_run
 
             activity_store.log(agent_id, "note", f"⏰ Scheduled run started: {title}",
                                detail={"scheduleId": sid})
 
-            async for ev in loop.run(
-                messages, model, registry, temperature,
-                session_id=f"schedule:{sid}", system=system,
-                top_p=top_p, top_k=top_k, agent_id=agent_id,
-                max_iterations=g.get("maxIterations"),
+            async for ev in stream_run(
+                agent, [{"role": "user", "content": schedule["prompt"]}],
+                session_id=f"schedule:{sid}", extra_system=_SCHEDULE_DIRECTIVE,
             ):
                 t = ev.get("type")
                 if t == "text":
                     text_parts.append(ev.get("delta", ""))
                 elif t == "error":
                     err = ev.get("message") or "run failed"
+        except asyncio.CancelledError:
+            # Cancelled mid-run by the bounded shutdown drain — record it honestly
+            # as an error (the finally below still runs record_run) instead of
+            # letting err stay None and logging a truncated partial as "ok".
+            err = "cancelled — backend shutting down"
+            raise
         except Exception as exc:  # noqa: BLE001
             err = str(exc)
             logger.warning("schedule %s failed", sid, exc_info=True)

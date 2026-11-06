@@ -67,3 +67,130 @@ def test_update_cmd_shapes(monkeypatch):
     pip_cmd = engines._update_cmd(engines._by_key("mlx-lm"))
     assert pip_cmd[0] == "/bin/uv" and pip_cmd[1:4] == ["pip", "install", "--python"]
     assert pip_cmd[-2:] == ["-U", "mlx-lm"]
+
+
+# --------------------------------------------------------------------------- #
+# managed engines (packaged desktop mode)
+# --------------------------------------------------------------------------- #
+
+import config  # noqa: E402
+
+
+def test_managed_pip_installed_reads_dist_info(tmp_path, monkeypatch):
+    venv = tmp_path / "engines" / "mlx"
+    site = venv / "lib" / "python3.12" / "site-packages"
+    (site / "mlx_lm-0.26.5.dist-info").mkdir(parents=True)
+    monkeypatch.setattr(config, "MLX_VENV", venv)
+    assert engines._managed_pip_installed("mlx-lm") == "0.26.5"
+    assert engines._pip_installed("mlx-lm") == "0.26.5"  # managed wins
+    assert engines._managed_pip_installed("mlx-vlm") is None
+
+
+def test_pip_target_python_prefers_managed_venv(tmp_path, monkeypatch):
+    venv = tmp_path / "engines" / "mlx"
+    monkeypatch.setattr(config, "MLX_VENV", venv)
+    # dev, venv absent → backend interpreter
+    monkeypatch.setattr(config, "PACKAGED", False)
+    assert engines._pip_target_python() == engines._VENV_PY
+    # packaged → always the managed venv (created on demand)
+    monkeypatch.setattr(config, "PACKAGED", True)
+    assert engines._pip_target_python() == str(venv / "bin" / "python")
+    # dev but the venv exists → managed venv
+    monkeypatch.setattr(config, "PACKAGED", False)
+    py = venv / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.touch()
+    assert engines._pip_target_python() == str(py)
+
+
+def test_mlx_bin_resolution(tmp_path, monkeypatch):
+    venv = tmp_path / "engines" / "mlx"
+    monkeypatch.setattr(config, "MLX_VENV", venv)
+    monkeypatch.delenv("MLX_BIN", raising=False)
+    assert config.mlx_bin() == "mlx_lm.server"  # bare name (PATH lookup)
+    server = venv / "bin" / "mlx_lm.server"
+    server.parent.mkdir(parents=True)
+    server.touch()
+    assert config.mlx_bin() == str(server)  # managed venv wins
+    monkeypatch.setenv("MLX_BIN", "/custom/mlx_lm.server")
+    assert config.mlx_bin() == "/custom/mlx_lm.server"  # env outranks all
+
+
+def test_llama_bin_prefers_managed_copy(tmp_path, monkeypatch):
+    managed_dir = tmp_path / "engines" / "llama"
+    monkeypatch.setattr(config, "LLAMA_ENGINE_DIR", managed_dir)
+    monkeypatch.setenv("LLAMA_BIN", "/bundled/llama-server")
+    assert config.llama_bin() == "/bundled/llama-server"  # no managed copy yet
+    managed = managed_dir / "llama-server"
+    managed.parent.mkdir(parents=True)
+    managed.touch()
+    managed.chmod(0o755)
+    assert config.llama_bin() == str(managed)  # managed update outranks bundled
+
+
+def test_can_update_packaged(monkeypatch):
+    monkeypatch.setattr(config, "PACKAGED", True)
+    monkeypatch.setattr(config, "uv_bin", lambda: "/bundled/uv")
+    assert engines._can_update(engines._by_key("llama.cpp")) is True  # no brew needed
+    assert engines._can_update(engines._by_key("mlx-lm")) is True
+
+
+def test_update_pip_packaged_creates_venv_and_uses_uv(tmp_path, monkeypatch):
+    venv = tmp_path / "engines" / "mlx"
+    monkeypatch.setattr(config, "PACKAGED", True)
+    monkeypatch.setattr(config, "MLX_VENV", venv)
+    monkeypatch.setattr(config, "ENGINES_DIR", tmp_path / "engines")
+    monkeypatch.setattr(config, "uv_bin", lambda: "/bundled/uv")
+
+    calls = []
+
+    async def fake_run(cmd, timeout, env=None):
+        calls.append((cmd, env))
+        if cmd[1] == "venv":  # simulate uv creating the venv
+            py = venv / "bin" / "python"
+            py.parent.mkdir(parents=True, exist_ok=True)
+            py.touch()
+        return 0, "ok"
+
+    monkeypatch.setattr(engines, "_run", fake_run)
+    monkeypatch.setattr(engines, "_installed", lambda e: "0.26.5")
+    res = asyncio.run(engines.update("mlx-lm"))
+    assert res["ok"] is True and res["installed"] == "0.26.5"
+    assert calls[0][0][:2] == ["/bundled/uv", "venv"]           # venv created first
+    assert "UV_PYTHON_INSTALL_DIR" in (calls[0][1] or {})       # python kept in APP_HOME
+    assert calls[1][0][:3] == ["/bundled/uv", "pip", "install"]
+    assert str(venv / "bin" / "python") in calls[1][0]          # targets the managed venv
+    assert calls[1][0][-1] == "mlx-lm"
+
+
+def test_update_llamacpp_packaged_downloads_release(monkeypatch):
+    monkeypatch.setattr(config, "PACKAGED", True)
+
+    async def fake_release():
+        return {"ok": True, "returncode": 0, "installed": "9999", "output": "installed"}
+    monkeypatch.setattr(engines, "_update_llamacpp_release", fake_release)
+    res = asyncio.run(engines.update("llama.cpp"))
+    assert res["ok"] is True and res["installed"] == "9999"
+
+
+def test_extract_llama_release_flattens_and_filters(tmp_path):
+    import io
+    import tarfile as tf
+    tar_path = tmp_path / "rel.tar.gz"
+    with tf.open(tar_path, "w:gz") as t:
+        for name, keep in [("llama-b9/bin/llama-server", True),
+                           ("llama-b9/bin/libggml.dylib", True),
+                           ("llama-b9/bin/default.metal", True),
+                           ("llama-b9/README.md", False),
+                           ("../evil.dylib", True)]:  # traversal name → flattened
+            data = b"x"
+            info = tf.TarInfo(name)
+            info.size = len(data)
+            t.addfile(info, io.BytesIO(data))
+    dest = tmp_path / "out"
+    copied = engines._extract_llama_release(tar_path, dest)
+    assert set(copied) == {"llama-server", "libggml.dylib", "default.metal", "evil.dylib"}
+    assert (dest / "llama-server").exists()
+    assert not (tmp_path / "evil.dylib").exists()  # never escaped dest
+    import os as _os
+    assert _os.access(dest / "llama-server", _os.X_OK)

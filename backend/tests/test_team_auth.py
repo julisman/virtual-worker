@@ -2,6 +2,8 @@
 (PRD-07). Proves solo mode is unchanged when Team mode is off.
 """
 
+import secrets
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,6 +12,14 @@ import team
 import storage.token_store as ts
 from app import app
 from storage import user_store
+
+# Passwords are minted per run so no credential literal lives in the source;
+# _pw() stays stable for a username within the run.
+_pws: dict[str, str] = {}
+
+
+def _pw(name: str) -> str:
+    return _pws.setdefault(name, f"pw-{name}-{secrets.token_hex(4)}")
 
 
 @pytest.fixture()
@@ -28,7 +38,7 @@ def _client() -> TestClient:
 
 
 def _bootstrap_owner(c: TestClient):
-    r = c.post("/api/auth/register", json={"username": "owner", "password": "pw-owner"})
+    r = c.post("/api/auth/register", json={"username": "owner", "password": _pw("owner")})
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -90,7 +100,7 @@ def test_login_logout_and_wrong_password(env):
     unk = c.post("/api/auth/login", json={"username": "ghost", "password": "x"})
     assert unk.status_code == 401
     # correct -> session + /me works
-    ok = c.post("/api/auth/login", json={"username": "owner", "password": "pw-owner"})
+    ok = c.post("/api/auth/login", json={"username": "owner", "password": _pw("owner")})
     assert ok.status_code == 200
     assert c.get("/api/auth/me").json()["user"]["username"] == "owner"
     # logout clears the session -> /api locked again
@@ -113,11 +123,11 @@ def test_role_gated_user_management(env):
     owner = _client()
     _bootstrap_owner(owner)
     # Owner invites a member and a viewer.
-    assert owner.post("/api/users", json={"username": "mem", "password": "pw-mem", "role": "member"}).status_code == 200
-    assert owner.post("/api/users", json={"username": "vw", "password": "pw-vw", "role": "viewer"}).status_code == 200
+    assert owner.post("/api/users", json={"username": "mem", "password": _pw("mem"), "role": "member"}).status_code == 200
+    assert owner.post("/api/users", json={"username": "vw", "password": _pw("vw"), "role": "viewer"}).status_code == 200
 
-    member = _login("mem", "pw-mem")
-    viewer = _login("vw", "pw-vw")
+    member = _login("mem", _pw("mem"))
+    viewer = _login("vw", _pw("vw"))
 
     # Members/viewers cannot manage users.
     assert member.get("/api/users").status_code == 403
@@ -136,11 +146,32 @@ def test_role_gated_user_management(env):
     assert owner.delete(f"/api/users/{vw_id}").status_code == 200
 
 
+def test_admin_cannot_create_owner(env):
+    # Privilege-escalation guard: only an owner may mint another owner, even
+    # though admins can otherwise invite users.
+    owner = _client()
+    _bootstrap_owner(owner)
+    owner.post("/api/users", json={"username": "adm", "password": _pw("adm"), "role": "admin"})
+    admin = _login("adm", _pw("adm"))
+    r = admin.post("/api/users", json={"username": "sneak", "password": _pw("sneak"), "role": "owner"})
+    assert r.status_code == 403
+
+
+def test_cannot_lock_out_the_studio(env):
+    # The last owner must not be able to demote or delete themselves into a
+    # studio with no owner, and no one can delete their own account.
+    owner = _client()
+    me = _bootstrap_owner(owner)
+    my_id = me["user"]["id"] if "user" in me else me["id"]
+    assert owner.patch(f"/api/users/{my_id}", json={"role": "admin"}).status_code == 400
+    assert owner.delete(f"/api/users/{my_id}").status_code == 400  # also "can't remove self"
+
+
 def test_disabled_user_session_invalidated(env):
     owner = _client()
     _bootstrap_owner(owner)
-    owner.post("/api/users", json={"username": "mem", "password": "pw-mem", "role": "member"})
-    member = _login("mem", "pw-mem")
+    owner.post("/api/users", json={"username": "mem", "password": _pw("mem"), "role": "member"})
+    member = _login("mem", _pw("mem"))
     assert member.get("/api/auth/me").status_code == 200
     # Disabling the member instantly invalidates their live session.
     user_store.update_status(user_store.get_by_username("mem")["id"], "disabled")

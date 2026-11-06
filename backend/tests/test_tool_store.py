@@ -43,7 +43,7 @@ def test_name_must_be_valid_identifier(store):
 
 def test_name_cannot_shadow_builtin_or_mcp(store):
     with pytest.raises(ts.ToolError):
-        store.create_tool({"name": "web_search"})
+        store.create_tool({"name": "browser_search"})
     with pytest.raises(ts.ToolError):
         store.create_tool({"name": "mcp__x__y"})
 
@@ -78,6 +78,87 @@ def test_get_tools_preserves_order(store):
     b = store.create_tool({"name": "bb"})
     out = store.get_tools([b["id"], a["id"]])
     assert [t["name"] for t in out] == ["bb", "aa"]
+
+
+# --- fixed parameters ------------------------------------------------------ #
+
+def test_fixed_params_round_trip(store):
+    t = store.create_tool({
+        "name": "invoke", "method": "POST", "url": "https://api.example.com/x",
+        "fixedParams": {"deployment_id": "abc123", "source": "ves"},
+    })
+    assert t["fixedParams"] == {"deployment_id": "abc123", "source": "ves"}
+    assert store.get_tool(t["id"])["fixedParams"]["source"] == "ves"
+
+
+def test_fixed_params_default_empty(store):
+    t = store.create_tool({"name": "plain", "url": "https://api.example.com/x"})
+    assert t["fixedParams"] == {}
+
+
+def test_fixed_params_must_be_scalar(store):
+    with pytest.raises(ts.ToolError):
+        store.create_tool({"name": "bad_fixed", "fixedParams": {"k": {"nested": 1}}})
+
+
+def test_fixed_params_merged_into_request(store, monkeypatch):
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+        text = "ok"
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def request(self, method, url, **kwargs):
+            captured.update(method=method, url=url, **kwargs)
+            return FakeResp()
+
+    monkeypatch.setattr(custom_tools.httpx, "AsyncClient", FakeClient)
+    t = store.create_tool({
+        "name": "invoke2", "method": "POST", "url": "https://api.example.com/x",
+        "allowPrivate": True,  # skip DNS-based SSRF guard for a public host anyway
+        "parameters": {"type": "object", "properties": {"input": {"type": "string"}}},
+        "fixedParams": {"deployment_id": "abc123"},
+    })
+    reg = custom_tools.make_custom_tools([t["id"]])
+    asyncio.run(reg["invoke2"]["fn"](input="hello", deployment_id="model-tries-to-override"))
+    # Model arg present; fixed value wins over a colliding model arg.
+    assert captured["json"]["input"] == "hello"
+    assert captured["json"]["deployment_id"] == "abc123"
+
+
+def test_dotted_params_nest_in_body(store, monkeypatch):
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+        text = "ok"
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def request(self, method, url, **kwargs):
+            captured.update(kwargs)
+            return FakeResp()
+
+    monkeypatch.setattr(custom_tools.httpx, "AsyncClient", FakeClient)
+    t = store.create_tool({
+        "name": "invoke3", "method": "POST", "url": "https://api.example.com/x",
+        "allowPrivate": True,
+        "parameters": {"type": "object", "properties": {"message.input_str": {"type": "string"}}},
+        "fixedParams": {"endpoint_deployment_hash_id": "m53", "user_id": "u1"},
+    })
+    reg = custom_tools.make_custom_tools([t["id"]])
+    asyncio.run(reg["invoke3"]["fn"](**{"message.input_str": "Hello, world!"}))
+    assert captured["json"] == {
+        "endpoint_deployment_hash_id": "m53",
+        "user_id": "u1",
+        "message": {"input_str": "Hello, world!"},
+    }
 
 
 # --- make_custom_tools / schema -------------------------------------------- #

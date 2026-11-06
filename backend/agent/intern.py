@@ -9,6 +9,7 @@ what happened. See docs/INTERN_AGENT_PRD.md §8.3.
 
 from __future__ import annotations
 
+from agent.inbox import CLOSING_STATUSES, flow_back_if_closed
 from storage import activity_store, task_store
 
 
@@ -21,10 +22,12 @@ def build_board_context(agent_id: str) -> str:
     lines = ["## Your task board",
              "You are an intern. You manage your own work as tasks on a Kanban board. "
              "Use `task_list` to see it, `task_claim` to start the next task, "
-             "`task_update` to move a task (in_progress → review when done, with a "
-             "result summary; blocked if you're stuck), `task_create` to file new work "
-             "you discover, and `task_comment` to log progress for your mentor. Move a "
-             "finished task to `review` (not `done`) so your mentor can sign off.", ""]
+             "`task_update` to move a task (default close is status='done' with a "
+             "result_summary that holds the complete deliverable — the full answer or "
+             "report the assigner will read, not a note about it; use 'review' when "
+             "it's done but you want your mentor to look; 'blocked' with a note when "
+             "you're stuck), `task_create` to file new work you discover, and "
+             "`task_comment` to log progress for your mentor.", ""]
     if not open_tasks:
         lines.append("_No open tasks right now._")
         return "\n".join(lines)
@@ -50,11 +53,13 @@ def make_intern_tools(agent_id: str) -> dict[str, dict]:
             + (f" :: {_summarize(t['description'])}" if t["description"] else "")
             for t in tasks)
 
-    async def task_create(title: str = "", description: str = "", priority: str = "medium") -> str:
+    async def task_create(title: str = "", description: str = "", criteria: str = "",
+                          priority: str = "medium") -> str:
         if not title.strip():
             return "task_create needs a 'title'."
         t = task_store.create(agent_id, {"title": title, "description": description,
-                                         "priority": priority, "status": "todo"}, origin="intern")
+                                         "criteria": criteria, "priority": priority,
+                                         "status": "todo"}, origin="intern")
         activity_store.log(agent_id, "task_created", f"Filed task: {t['title']}",
                            task_id=t["id"], detail={"priority": t["priority"], "by": "intern"})
         return f"created task {t['id']} ({t['priority']}) — {t['title']}"
@@ -87,6 +92,8 @@ def make_intern_tools(agent_id: str) -> dict[str, dict]:
             activity_store.log(agent_id, "task_moved",
                                f"{t['title']}: {t['status']} → {status}", task_id=id,
                                detail={"from": t["status"], "to": status})
+            if status in CLOSING_STATUSES:
+                flow_back_if_closed(agent_id, id)
         return f"updated {id}" + (f" → {status}" if status else "") + (" (+note)" if note else "")
 
     async def task_comment(id: str = "", text: str = "") -> str:
@@ -109,19 +116,24 @@ def make_intern_tools(agent_id: str) -> dict[str, dict]:
             {"status": {"type": "string", "description": "optional: backlog|todo|in_progress|blocked|review|done|cancelled"}}, []),
         "task_create": _tool(
             task_create, "task_create",
-            "File a new task on your board (use this when you discover work to do).",
+            "File a new task on your board (use this when you discover work to do). "
+            "Include a clear description and the criteria (definition of done) so the "
+            "work can be verified against concrete acceptance conditions.",
             {"title": {"type": "string"}, "description": {"type": "string"},
+             "criteria": {"type": "string", "description": "definition of done — the checklist/conditions that must be met for this task to count as complete"},
              "priority": {"type": "string", "description": "low|medium|high|urgent"}}, ["title"]),
         "task_claim": _tool(
             task_claim, "task_claim", "Start a task — moves it to in_progress.",
             {"id": {"type": "string", "description": "the task id"}}, ["id"]),
         "task_update": _tool(
             task_update, "task_update",
-            "Move a task to a new status. When finished, set status='review' with a "
-            "result_summary so your mentor can sign off; use 'blocked' if you're stuck.",
+            "Move a task to a new status. When finished, set status='done' with a "
+            "result_summary that contains the complete deliverable; use 'review' when "
+            "it's done but you want your mentor to look before sign-off, or 'blocked' "
+            "with a note when you're stuck.",
             {"id": {"type": "string"}, "status": {"type": "string"},
              "note": {"type": "string", "description": "optional progress note (logged as a comment)"},
-             "result_summary": {"type": "string", "description": "what you did, for the mentor's review"}}, ["id"]),
+             "result_summary": {"type": "string", "description": "the complete deliverable: the full answer or report the assigner will read, not a note about it"}}, ["id"]),
         "task_comment": _tool(
             task_comment, "task_comment", "Add a progress note to a task's thread.",
             {"id": {"type": "string"}, "text": {"type": "string"}}, ["id", "text"]),

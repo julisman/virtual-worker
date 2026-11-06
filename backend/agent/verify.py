@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 
-from gateway.upstream import chat_completion_stream
+from gateway import egress
 from storage import task_store
 
 logger = logging.getLogger(__name__)
@@ -31,13 +31,13 @@ _SYSTEM = (
 )
 
 
-async def _complete(model: str, system: str, user: str) -> str:
+async def _complete(model: str, system: str, user: str, provider: dict | None = None) -> str:
     payload = {
         "model": model, "temperature": 0.0,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
     }
     text = ""
-    async for chunk in chat_completion_stream(payload):
+    async for chunk in egress.stream(payload, provider):
         for ch in chunk.get("choices") or []:
             delta = ch.get("delta") or {}
             if delta.get("content"):
@@ -45,25 +45,36 @@ async def _complete(model: str, system: str, user: str) -> str:
     return text.strip()
 
 
-async def verify_task(model: str, task: dict, *, context: str = "") -> tuple[bool, str]:
+async def verify_task(model: str, task: dict, *, context: str = "",
+                      provider: dict | None = None) -> tuple[bool, str]:
     """Return (verified, reason). On any error, default to verified=True so a
-    flaky reviewer never blocks real work."""
+    flaky reviewer never blocks real work. ``provider`` runs the reviewer on the
+    agent's external provider (or None for the local upstream)."""
     user = (
         f"Task: {task['title']}\n"
-        f"Description: {task.get('description') or '(none)'}\n\n"
+        f"Description: {task.get('description') or '(none)'}\n"
+        f"Definition of done (acceptance criteria): {task.get('criteria') or '(none specified)'}\n\n"
         f"The worker marked this DONE.\n"
         f"Result summary: {task.get('resultSummary') or '(none)'}\n"
         f"{context}\n\n"
-        "Is the task genuinely complete and correct?"
+        "Is the task genuinely complete and correct? If a definition of done is given, "
+        "every criterion must be met — reply NEEDS_WORK if any is unmet."
     )
     try:
-        out = await _complete(model, _SYSTEM, user)
+        out = await _complete(model, _SYSTEM, user, provider=provider)
     except Exception as exc:  # noqa: BLE001
         logger.debug("verify call failed: %s", exc)
         return True, "verification skipped (reviewer unavailable)"
-    line = (out or "").strip().splitlines()[0] if out.strip() else ""
+    # Find the verdict line anywhere in the reply (chatty models preamble), and
+    # treat a reply with NO parseable verdict like an unavailable reviewer (fail
+    # open, but say so) instead of counting arbitrary text as a pass.
+    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    line = next((ln for ln in lines
+                 if ln.upper().startswith(("VERIFIED", "NEEDS_WORK"))), "")
+    if not line:
+        return True, "verification inconclusive (reviewer reply did not follow the format)"
     verified = not line.upper().startswith("NEEDS_WORK")
-    reason = line.split(":", 1)[1].strip() if ":" in line else (line or "(no reason given)")
+    reason = line.split(":", 1)[1].strip() if ":" in line else "(no reason given)"
     return verified, reason[:300]
 
 

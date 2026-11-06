@@ -1,0 +1,4 @@
+interface:
+  display_name: "Delegate Agent"
+  short_description: "Spawn and steer durable CLI coding agents"
+  default_prompt: "Delegate this task to an available coding-agent backend, monitor progress, steer when necessary, and return the verified result."
