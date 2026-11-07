@@ -31,6 +31,9 @@ FAKE_CLAUDE = textwrap.dedent('''\
         time.sleep(30)
     if prompt == "big":
         emit({"type": "user", "message": {"content": [{"type": "tool_result", "content": "x" * 300000}]}})
+    if prompt == "ticks":
+        emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "pytest -q"}}]}})
+        time.sleep(2.5)
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "Looking..."},
           {"type": "tool_use", "name": "Read", "input": {"file_path": "README.md"}}]}})
     if prompt == "fail":
@@ -482,3 +485,118 @@ def test_resolve_session_uses_prefix_glob_not_full_scan(home, monkeypatch):
     assert cc.resolve_session("old-33")["id"] == "old-3333-bbbb"
     assert calls == ["old-3333-bbbb"]            # only the matched transcript was parsed
     assert cc.resolve_session("../etc") is None
+
+
+# ─── Harness depth: progress, reply-to-continue, Codex held sessions ──────────
+
+def test_progress_posts_while_running(home, monkeypatch):
+    sent = []
+
+    class FakeManager:
+        async def send(self, account_id, target, text, **kw):
+            sent.append(text); return {"status": "sent", "messageId": f"m{len(sent)}"}
+    import channels.manager as mgr
+    monkeypatch.setattr(mgr, "manager", FakeManager())
+    base.set_settings({"progressEveryS": 1})
+    origin = {"accountId": "acc", "conversationId": "c1", "agentId": "ag"}
+    on = {"guardrails": {"codingHarness": True}}
+
+    async def main():
+        reply = await commands.handle("/code run old-33 ticks", origin=origin, agent=on)
+        assert "reply to this message" in reply
+        job = list(base.JOBS.values())[-1]
+        await asyncio.wait_for(job.task, 15)
+        await asyncio.sleep(0.05)
+        progress = [t for t in sent if t.startswith("⏳")]
+        assert progress and "1 tool calls" in progress[0] and "Bash pytest -q" in progress[0]
+        assert sent[-1].startswith("Claude Code finished job") and "Reply to this message to continue" in sent[-1]
+        # the result message id maps back to the job's session
+        assert base.lookup_reply("acc", f"m{len(sent)}")["sessionId"] == "old-3333-bbbb"
+    asyncio.run(main())
+
+
+def test_reply_to_job_message_continues_the_session(home, monkeypatch):
+    from channels import base as cbase
+    from channels.base import ChannelAdapter, InboundMessage
+    from channels.manager import ChannelManager
+    import channels.manager as mgr
+    from storage import agent_store, chat_channel_store as store
+
+    class Fake(ChannelAdapter):
+        kind = "fakec"; label = "FakeC"; max_text_len = 4000
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw); self.sent = []
+        async def start(self): self._set_status("open", me="me")
+        async def stop(self): self._set_status("off")
+        async def send(self, target, text, *, reply_to=None, attachments=None):
+            self.sent.append(text); return f"out-{len(self.sent)}"      # platform ids
+
+    cbase.registry.register(Fake)
+    agent = agent_store.create_agent({"name": "Dev", "persona": "x", "guardrails": {"codingHarness": True}})
+    acct = store.create_account("fakec", "a", enabled=True, default_agent_id=agent["id"],
+                                config={"dmPolicy": "open", "debounceMs": 0, "ackAfterMs": 0})
+    m = ChannelManager(); m._started = True
+    monkeypatch.setattr(mgr, "manager", m)
+
+    async def boom(a, messages, session_id):
+        raise AssertionError("the model must not run")
+    monkeypatch.setattr(mgr, "execute_turn", boom)
+
+    def msg(text, event, reply_to=None):
+        return InboundMessage(channel="fakec", account_id=acct["id"], conversation_id="c", kind="dm",
+                              sender_id="u", text=text, event_id=event, reply_to=reply_to)
+
+    async def main():
+        await m.start_account(acct["id"])
+        ad = m.adapter(acct["id"])
+        await m.handle_inbound(msg("/code run old-33 first task", "e1"))
+        assert ad.sent[-1].startswith("Started job")
+        started_id = f"out-{len(ad.sent)}"
+        job = list(base.JOBS.values())[-1]
+        await asyncio.wait_for(job.task, 10)
+        await asyncio.sleep(0.05)
+        assert "done: first task" in ad.sent[-1]
+        result_id = f"out-{len(ad.sent)}"
+        # Quote the result message with a plain follow-up: no /code needed.
+        await m.handle_inbound(msg("now add tests", "e2", reply_to=result_id))
+        assert ad.sent[-1].startswith("Continuing Claude Code session old-3333")
+        job2 = list(base.JOBS.values())[-1]
+        assert job2.prompt == "now add tests" and job2.session_id == "old-3333-bbbb"
+        await asyncio.wait_for(job2.task, 10)
+        await asyncio.sleep(0.05)
+        assert "done: now add tests" in ad.sent[-1]
+        # Quoting the "Started job" message works too; event-id style "<chat>:<id>" resolves.
+        await m.handle_inbound(msg("and lint", "e3", reply_to=f"c:{started_id}"))
+        assert ad.sent[-1].startswith("Continuing")
+        job3 = list(base.JOBS.values())[-1]
+        await asyncio.wait_for(job3.task, 10)
+        # A reply to an unrelated message goes to the model path (which we stubbed to fail loudly)
+        with pytest.raises(AssertionError):
+            await m._turn(store.get_account(acct["id"]), msg("hello", "e4", reply_to="nope"))
+        await m.stop()
+    asyncio.run(main())
+
+
+def test_codex_sessions_held_by_running_processes(codex_home, home, monkeypatch):
+    codex._proc_cache.update(at=0.0, procs=[])
+    monkeypatch.setattr(codex, "_ps_lines", lambda: [
+        "4242 codex resume 0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "4243 /usr/bin/grep codex",
+    ])
+    monkeypatch.setattr(codex, "_cwd_of", lambda pid: str(home["proj"]))
+    ss = codex.list_sessions()
+    assert ss[0]["live"] and ss[0]["status"] == "open" and ss[0]["pid"] == 4242
+    assert codex.resolve_session("0199aa")["status"] == "open"
+
+    async def main():
+        with pytest.raises(base.HarnessError, match="in use"):
+            await codex.start("x", session="0199aa")
+    asyncio.run(main())
+
+    # An interactive codex (no resume arg) in the project dir holds the newest session there.
+    codex._proc_cache.update(at=0.0, procs=[])
+    monkeypatch.setattr(codex, "_ps_lines", lambda: ["4300 codex"])
+    assert codex.list_sessions()[0]["status"] == "open"
+    codex._proc_cache.update(at=0.0, procs=[])
+    monkeypatch.setattr(codex, "_ps_lines", lambda: [])
+    assert codex.list_sessions()[0]["status"] == "stopped"

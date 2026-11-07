@@ -351,17 +351,19 @@ class ChannelManager:
                              "No agent is bound to this chat yet.", reply_to=msg.event_id,
                              source="policy")
             return
-        if cmd.startswith("/code"):
-            # Deterministic Claude Code commands; results of long runs flow back here.
-            from harness import commands as harness_commands
-            reply = await harness_commands.handle(
-                msg.text or "", agent=agent,
-                origin={"accountId": acct["id"], "conversationId": msg.conversation_id,
-                        "agentId": agent.get("id"), "sessionKey": session_id, "kind": acct["kind"],
-                        "source": "command"})
+        from harness import commands as harness_commands
+        h_origin = {"accountId": acct["id"], "conversationId": msg.conversation_id,
+                    "agentId": agent.get("id"), "sessionKey": session_id, "kind": acct["kind"],
+                    "source": "command"}
+        if cmd.startswith("/code") or (msg.reply_to and harness_commands.continuation(h_origin, msg.reply_to)):
+            # Deterministic coding-harness commands, or a reply quoting one of the
+            # harness's own messages (continue that session). Results flow back here.
+            reply = await harness_commands.handle(msg.text or "", agent=agent, origin=h_origin,
+                                                  reply_to=msg.reply_to)
             if reply is not None:
-                await self._send(acct["id"], msg.conversation_id, reply, reply_to=msg.event_id,
-                                 source="command", agent_id=agent.get("id"))
+                rec = await self._send(acct["id"], msg.conversation_id, reply, reply_to=msg.event_id,
+                                       source="command", agent_id=agent.get("id"))
+                harness_commands.after_send(h_origin, rec)
                 return
 
         adapter = self._adapters.get(acct["id"])

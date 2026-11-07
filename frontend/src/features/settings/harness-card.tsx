@@ -9,7 +9,7 @@ type HarnessKey = "claude" | "codex";
 interface HarnessSettings {
   bin: string; permissionMode: string; model: string;
   codexBin: string; codexSandbox: string; codexModel: string;
-  maxTurns: number; timeoutS: number; allowedRoots: string[]; maxResultChars: number;
+  maxTurns: number; timeoutS: number; progressEveryS: number; allowedRoots: string[]; maxResultChars: number;
 }
 interface Availability { label: string; available: boolean; bin: string | null; version: string | null; error: string | null }
 interface Status { harnesses: Record<HarnessKey, Availability>; settings: HarnessSettings; running: number }
@@ -172,6 +172,10 @@ export function HarnessCard() {
             <label className="text-xs text-body">Timeout (seconds)
               <input className={`${inputCls} mt-1`} type="number" min={30} max={21600} value={cfg.timeoutS} disabled={saving}
                 onChange={(e) => setCfg({ ...cfg, timeoutS: Number(e.target.value) || 1800 })} onBlur={() => save({})} />
+            </label>
+            <label className="text-xs text-body">Progress post every N seconds in chat (0 = only the result)
+              <input className={`${inputCls} mt-1`} type="number" min={0} max={3600} value={cfg.progressEveryS} disabled={saving}
+                onChange={(e) => setCfg({ ...cfg, progressEveryS: Number(e.target.value) || 0 })} onBlur={() => save({})} />
             </label>
             <label className="text-xs text-body">Allowed roots for new sessions (one per line)
               <textarea className={`${inputCls} mt-1 font-mono text-xs`} rows={2} disabled={saving}

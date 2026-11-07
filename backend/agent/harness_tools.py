@@ -12,7 +12,7 @@ from __future__ import annotations
 from channels.manager import CURRENT_INBOUND
 from harness import base
 from harness import claude_code, codex  # noqa: F401 — registers both adapters
-from harness.commands import deliver_to
+from harness.commands import deliver_to, progress_to
 
 _HARNESS_PARAM = {"type": "string", "enum": ["claude", "codex"],
                   "description": "which coding agent: 'claude' (Claude Code, default) or 'codex' (OpenAI Codex)"}
@@ -51,7 +51,8 @@ def make_harness_tools(agent_id: str) -> dict[str, dict]:
         try:
             ad = base.get(harness)
             job = await base.start_job(ad, prompt, session=session or None, project=project or None,
-                                       origin=origin, on_done=deliver_to(origin) if origin.get("conversationId") else None)
+                                       origin=origin, on_done=deliver_to(origin) if origin.get("conversationId") else None,
+                                       on_progress=progress_to(origin))
         except base.HarnessError as exc:
             return f"error: {exc}"
         tail = (" The result will be posted into this chat when it finishes."

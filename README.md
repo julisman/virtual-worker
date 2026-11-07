@@ -235,8 +235,10 @@ If Claude Code or the Codex CLI is installed, a worker can watch and steer it:
    ```
 
    Or just ask the worker: "what is Claude doing on the ticketing project?", "tell it to
-   also update the changelog". The result of a run is posted back into the same chat when
-   Claude Code finishes, with turns, tool calls and cost.
+   also update the changelog". While a run works you get a short progress line now and
+   then; when it finishes the reply lands in the same chat with turns, tool calls and
+   cost. Reply to any of those messages with plain text to send a follow-up into the same
+   session.
 
 Claude Code sessions open in a terminal are forked rather than written to, new sessions
 are confined to the allowed roots, and the channel's allow-list decides who may send

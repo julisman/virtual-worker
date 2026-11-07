@@ -39,6 +39,7 @@ DEFAULTS = {
     # shared
     "maxTurns": 60,           # Claude Code: --max-turns (Codex has no equivalent)
     "timeoutS": 1800,         # kill a run after this long
+    "progressEveryS": 90,     # post a progress line into the chat this often while a run works (0 = off)
     "allowedRoots": [],       # directories under which *new* sessions may be started
     "maxResultChars": 3500,   # trim the answer posted back to a chat
 }
@@ -72,6 +73,7 @@ def set_settings(values: dict) -> dict:
             cur[k] = values[k]
     cur["maxTurns"] = max(0, min(500, int(cur["maxTurns"] or 0)))
     cur["timeoutS"] = max(30, min(6 * 3600, int(cur["timeoutS"] or 1800)))
+    cur["progressEveryS"] = max(0, min(3600, int(cur["progressEveryS"] or 0)))
     cur["maxResultChars"] = max(500, min(20000, int(cur["maxResultChars"] or 3500)))
     if cur["permissionMode"] not in PERMISSION_MODES:
         raise HarnessError("permissionMode must be one of " + ", ".join(m for m in PERMISSION_MODES if m))
@@ -191,6 +193,7 @@ def adapters() -> list[Adapter]:
 # --------------------------------------------------------------------------- #
 
 OnDone = Callable[["Job"], Awaitable[None]]
+OnProgress = Callable[["Job"], Awaitable[None]]
 
 
 @dataclass
@@ -217,6 +220,11 @@ class Job:
     proc: asyncio.subprocess.Process | None = field(default=None, repr=False)
     task: asyncio.Task | None = field(default=None, repr=False)
     on_done: OnDone | None = field(default=None, repr=False)
+    on_progress: OnProgress | None = field(default=None, repr=False)
+    progress_mark: tuple = field(default=(0, ""), repr=False)   # (tool_calls, last_text) at the last progress post
+
+    def progressed(self) -> bool:
+        return (self.tool_calls, self.last_text) != self.progress_mark
 
     def view(self) -> dict:
         return {
@@ -281,7 +289,7 @@ def running_on(session_id: str) -> Job | None:
 
 async def start_job(adapter: Adapter, prompt: str, *, session: str | None = None,
                     project: str | None = None, origin: dict | None = None,
-                    on_done: OnDone | None = None) -> Job:
+                    on_done: OnDone | None = None, on_progress: OnProgress | None = None) -> Job:
     """Start a prompt against an existing session (id, prefix or name) or a
     new one in ``project`` (must be under an allowed root)."""
     prompt = (prompt or "").strip()
@@ -314,7 +322,8 @@ async def start_job(adapter: Adapter, prompt: str, *, session: str | None = None
     if sum(1 for j in JOBS.values() if j.status == "running") >= MAX_PARALLEL:
         raise HarnessError(f"{MAX_PARALLEL} runs are already in progress; wait for one to finish or stop it")
     job = Job(id=uuid.uuid4().hex[:8], harness=adapter.key, prompt=prompt, cwd=cwd,
-              session_id=session_id, forked=fork, started_at=now_iso(), origin=origin or {}, on_done=on_done)
+              session_id=session_id, forked=fork, started_at=now_iso(), origin=origin or {},
+              on_done=on_done, on_progress=on_progress)
     argv = adapter.argv(job)
     env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
     try:
@@ -382,6 +391,21 @@ async def _supervise(adapter: Adapter, job: Job) -> None:
                 break
             stderr_tail = (stderr_tail + raw.decode("utf-8", "replace"))[-2000:]
 
+    async def ticker():
+        every = float(get_settings().get("progressEveryS") or 0)
+        if every <= 0 or job.on_progress is None:
+            return
+        while True:
+            await asyncio.sleep(every)
+            if job.status != "running" or not job.progressed():
+                continue
+            job.progress_mark = (job.tool_calls, job.last_text)
+            try:
+                await job.on_progress(job)
+            except Exception:  # noqa: BLE001
+                logger.debug("harness on_progress failed", exc_info=True)
+
+    progress_task = asyncio.get_event_loop().create_task(ticker())
     try:
         await asyncio.wait_for(asyncio.gather(read_stdout(), read_stderr(), proc.wait()), timeout=timeout)
         rc = proc.returncode
@@ -412,6 +436,7 @@ async def _supervise(adapter: Adapter, job: Job) -> None:
         job.error = str(exc)[:500]
         await _terminate(proc)
     finally:
+        progress_task.cancel()
         job.finished_at = now_iso()
         if job.status != "done":
             try:
@@ -479,6 +504,39 @@ async def shutdown() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# "Reply to this message to continue": platform message id → job/session
+# --------------------------------------------------------------------------- #
+
+_REPLY_MAP: dict[tuple[str, str], dict] = {}
+_REPLY_KEEP = 500
+
+
+def remember_reply(account_id: str | None, message_id: str | None, ctx: dict) -> None:
+    """Record that our message ``message_id`` on ``account_id`` belongs to a
+    harness job, so a chat reply quoting it can continue that session."""
+    if not account_id or not message_id or message_id == "sent":
+        return
+    _REPLY_MAP[(account_id, str(message_id))] = dict(ctx)
+    while len(_REPLY_MAP) > _REPLY_KEEP:
+        _REPLY_MAP.pop(next(iter(_REPLY_MAP)))
+
+
+def lookup_reply(account_id: str | None, message_id: str | None) -> dict | None:
+    if not account_id or not message_id:
+        return None
+    mid = str(message_id)
+    hit = _REPLY_MAP.get((account_id, mid))
+    if hit is None and ":" in mid:                 # event ids like "<chat>:<message id>"
+        hit = _REPLY_MAP.get((account_id, mid.rsplit(":", 1)[-1]))
+    return dict(hit) if hit else None
+
+
+def reply_context(job: Job) -> dict:
+    return {"harness": job.harness, "sessionId": job.new_session_id or job.session_id or "",
+            "jobId": job.id, "cwd": job.cwd}
+
+
+# --------------------------------------------------------------------------- #
 # Text renderings for chat surfaces
 # --------------------------------------------------------------------------- #
 
@@ -535,6 +593,15 @@ def render_detail(d: dict) -> str:
 def render_jobs(jobs: list[dict]) -> str:
     return "\n".join(f"{j['id']} · {j['harness']} · {j['status']} · {j['toolCalls']} tool calls · {short(j['prompt'], 80)}"
                      for j in jobs)
+
+
+def render_progress(job: Job) -> str:
+    label = {"claude": "Claude Code", "codex": "Codex"}.get(job.harness, job.harness)
+    recent = [e for e in job.events if e["kind"] in ("tool", "text")][-3:]
+    lines = [f"⏳ {label} job {job.id} · {job.tool_calls} tool calls so far"]
+    for e in recent:
+        lines.append(("  · " if e["kind"] == "tool" else "  » ") + short(e["text"], 120))
+    return "\n".join(lines)
 
 
 def render_job(job: Job, max_chars: int | None = None) -> str:

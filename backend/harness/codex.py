@@ -22,7 +22,9 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import config
@@ -121,14 +123,77 @@ def _rollouts() -> list[Path]:
     return sorted(root.glob("**/rollout-*.jsonl"), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
 
 
-def _row(info: dict) -> dict:
+# Codex has no live-session registry. Approximate it from the process list: a
+# `codex … resume <id>` process pins a session; an interactive `codex` whose
+# working directory equals a session's project holds that project's newest
+# session. Cached briefly because `ps` + `lsof` are not free.
+_proc_cache: dict = {"at": 0.0, "procs": []}
+
+
+def _ps_lines() -> list[str]:
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=5)
+        return out.stdout.splitlines()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _cwd_of(pid: int) -> str:
+    proc = Path(f"/proc/{pid}/cwd")
+    if proc.exists():
+        try:
+            return os.readlink(proc)
+        except OSError:
+            return ""
+    try:
+        out = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"], capture_output=True, text=True, timeout=5)
+        for line in out.stdout.splitlines():
+            if line.startswith("n"):
+                return line[1:]
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def running_processes() -> list[dict]:
+    """``[{pid, cwd, sessionId}]`` for codex CLI processes (10 s cache)."""
+    now = time.time()
+    if now - _proc_cache["at"] < 10:
+        return list(_proc_cache["procs"])
+    procs: list[dict] = []
+    for line in _ps_lines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue
+        pid, cmd = int(parts[0]), parts[1]
+        argv = cmd.split()
+        if not argv or os.path.basename(argv[0]) != "codex" or pid == os.getpid():
+            continue
+        sid = ""
+        if "resume" in argv:
+            i = argv.index("resume")
+            sid = next((a for a in argv[i + 1:] if not a.startswith("-")), "")
+        procs.append({"pid": pid, "cwd": _cwd_of(pid), "sessionId": sid})
+    _proc_cache.update(at=now, procs=procs)
+    return list(procs)
+
+
+def _row(info: dict, procs: list[dict] | None = None, newest_in_cwd: bool = True) -> dict:
     running = base.running_on(info["id"])
+    held = None
+    for pr in procs or []:
+        if pr["sessionId"] and info["id"].startswith(pr["sessionId"]):
+            held = pr
+            break
+        if not pr["sessionId"] and newest_in_cwd and pr["cwd"] and pr["cwd"] == (info.get("cwd") or ""):
+            held = pr
+    live = bool(running or held)
     return {
         "id": info["id"], "harness": KEY,
         "title": info.get("title") or "(untitled)",
         "project": info.get("cwd") or "",
-        "live": bool(running), "status": "busy" if running else "stopped",
-        "name": "", "pid": None,
+        "live": live, "status": "busy" if running else ("open" if held else "stopped"),
+        "name": "", "pid": (held or {}).get("pid"),
         "lastActivity": info.get("lastTs") or info.get("firstTs"),
         "lastPrompt": base.short(info.get("lastPrompt") or ""),
         "lastAssistant": base.short(info.get("lastAssistant") or ""),
@@ -139,13 +204,17 @@ def _row(info: dict) -> dict:
 def list_sessions(limit: int = 20, project: str | None = None) -> list[dict]:
     out: list[dict] = []
     seen: set[str] = set()
+    procs = running_processes()
+    newest_cwds: set[str] = set()          # the first (newest) session per project is the one a TUI holds
     for p in _rollouts()[: max(limit * 3, 30)]:
         info = _scan(p)
         if not info or not info.get("id") or info["id"] in seen or not info.get("messages"):
             continue
         if project and project not in (info.get("cwd") or ""):
             continue
-        out.append(_row(info))
+        cwd = info.get("cwd") or ""
+        out.append(_row(info, procs, newest_in_cwd=cwd not in newest_cwds))
+        newest_cwds.add(cwd)
         seen.add(info["id"])
     return base.rank_sessions(out)[:limit]
 
@@ -167,7 +236,8 @@ def resolve_session(ref: str) -> dict | None:
     ids = {_id_of(p) for p in hits}
     if len(ids) != 1:
         return None
-    return _row(_scan(hits[0]))
+    sid = ids.pop()
+    return next((s for s in list_sessions(limit=200) if s["id"] == sid), None) or _row(_scan(hits[0]), running_processes())
 
 
 def _id_of(p: Path) -> str:
@@ -182,7 +252,7 @@ def session_detail(session_id: str, turns: int = 6) -> dict | None:
     if not p:
         return None
     info = _scan(p)
-    row = _row(info)
+    row = next((s for s in list_sessions(limit=200) if s["id"] == session_id), None) or _row(info, running_processes())
     return {**row, "assistantName": "Codex", "gitBranch": "", "model": info.get("model") or "",
             "firstActivity": info.get("firstTs"), "toolCalls": info.get("toolCalls", 0),
             "turns": (info.get("all") or [])[-turns:] if turns else [], "transcript": str(p)}
