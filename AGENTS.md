@@ -21,7 +21,7 @@ virtual-worker/
 │   ├── agent/          # the agent harness — runner.stream_run() → compose() → loop.run(); tools, worker,
 │   │                   #   scheduler, triggers, inbox (flow-back), crusher (context compression), wiki,
 │   │                   #   browser_control, skill_factory, team, vision_helper, doc_tools, …
-│   ├── channels/       # chat-channel plugins: base contract, manager, whatsapp/ (+ Node bridge), telegram
+│   ├── channels/       # chat-channel plugins: base contract, manager, whatsapp/ (+ Node bridge), telegram, discord, slack, discord, slack
 │   ├── vw_cli.py       # `./vw` service mode: detached supervisor, auto-restart, built UI
 │   ├── runtime/        # managed model server + engine management
 │   ├── gateway/        # protocol translators (Anthropic / Responses / Gemini) + providers.py /
@@ -131,6 +131,11 @@ inbound (browser / coding agents / later: chat channels)
   `_RedactFilter` scrubbing tokens from log lines; webhook paths bypass the team-mode
   cookie gate because they carry their own proof (HMAC / unguessable token). Keep every
   new inbound endpoint under that rule. See `SECURITY.md`.
+- **Team mode** (`middleware/team_auth.py`): when enabled, every `/api` call needs a
+  session; mutating calls must meet the role floor in `_ROLE_POLICY` (longest prefix
+  wins, default `member`; installation-wide config/secrets are `admin`); every mutating
+  call is written to `audit_log` (`storage/audit_store.py`). A new admin-only route must
+  be added to `_ROLE_POLICY` or it defaults to member.
 - **Stores** (`storage/*_store.py`) all open `app.db` the same way: a `_conn()` with
   `PRAGMA journal_mode=WAL` + `row_factory=sqlite3.Row`, ISO timestamps, a
   `threading.Lock`, and `camelCase` dicts out. Mirror an existing store when adding

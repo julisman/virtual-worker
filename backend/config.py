@@ -339,6 +339,7 @@ ACTIVITY_MAX_ROWS = int(os.environ.get("VW_ACTIVITY_MAX_ROWS", "50000"))
 
 # Retention for the rest of the always-on state (the maintenance loop).
 DELIVERY_RETENTION_DAYS = int(os.environ.get("VW_DELIVERY_RETENTION_DAYS", "90"))
+AUDIT_RETENTION_DAYS = int(os.environ.get("VW_AUDIT_RETENTION_DAYS", "365"))       # team-mode audit log
 CHAT_EVENT_RETENTION_DAYS = int(os.environ.get("VW_CHAT_EVENT_RETENTION_DAYS", "7"))      # channel dedup ids
 CHANNEL_MEDIA_RETENTION_DAYS = int(os.environ.get("VW_CHANNEL_MEDIA_RETENTION_DAYS", "14"))  # received files
 MAINTENANCE_INTERVAL_S = int(os.environ.get("VW_MAINTENANCE_INTERVAL_S", "3600"))

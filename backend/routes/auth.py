@@ -36,14 +36,23 @@ class LoginRequest(BaseModel):
     password: str
 
 
-def _set_session_cookie(response: Response, user_id: str) -> None:
+def _is_https(request: Request | None) -> bool:
+    if request is None:
+        return False
+    return (request.url.scheme == "https"
+            or (request.headers.get("x-forwarded-proto") or "").lower() == "https")
+
+
+def _set_session_cookie(response: Response, user_id: str, request: Request | None = None) -> None:
     raw = user_store.create_session(user_id, ttl_days=team.session_days())
     response.set_cookie(
         key=team.COOKIE_NAME,
         value=team.make_cookie(raw),
         httponly=True,
         samesite="strict",
-        secure=False,  # local-first: served over http on localhost
+        # Plain http on localhost in solo/dev; Secure once served over TLS
+        # (directly or behind a proxy that sets X-Forwarded-Proto).
+        secure=_is_https(request),
         max_age=team.session_days() * 24 * 3600,
         path="/",
     )
@@ -61,7 +70,7 @@ async def register(req: RegisterRequest, request: Request, response: Response):
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         team.enable()  # flip the trust boundary — auth now required from here on
-        _set_session_cookie(response, user["id"])
+        _set_session_cookie(response, user["id"], request)
         logger.info("team mode enabled; owner bootstrapped")
         return {"user": user, "teamMode": True}
 
@@ -82,12 +91,18 @@ async def register(req: RegisterRequest, request: Request, response: Response):
 
 
 @router.post("/login")
-async def login(req: LoginRequest, response: Response):
+async def login(req: LoginRequest, request: Request, response: Response):
+    client = request.client.host if request.client else ""
+    uname = (req.username or "").strip().lower()
+    if team.login_limiter.blocked(f"u:{uname}", f"c:{client}"):
+        raise HTTPException(429, "too many failed login attempts — try again later")
     user = user_store.verify_password(req.username, req.password)
     if not user:
+        team.login_limiter.failed(f"u:{uname}", f"c:{client}")
         # Same generic message + timing for unknown user vs. wrong password.
         raise HTTPException(401, "invalid username or password")
-    _set_session_cookie(response, user["id"])
+    team.login_limiter.succeeded(f"u:{uname}", f"c:{client}")
+    _set_session_cookie(response, user["id"], request)
     return {"user": user}
 
 

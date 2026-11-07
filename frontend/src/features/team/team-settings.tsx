@@ -192,6 +192,46 @@ function UsersTable() {
   );
 }
 
+interface AuditEntry { id: string; ts: string; username: string | null; role: string | null; method: string; path: string; status: number | null; client: string | null }
+
+function AuditCard() {
+  const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try { setEntries((await apiJson<{ entries: AuditEntry[] }>("/api/team/audit?limit=100")).entries); setError(null); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  return (
+    <div className="rounded-2xl border border-line bg-canvas p-4">
+      <div className="flex items-center">
+        <p className="text-sm font-medium text-ink">Audit log</p>
+        <span className="ml-2 text-xs text-mute">every change, who made it, and the outcome</span>
+        <button onClick={load} className="ml-auto rounded-lg border border-pressed px-2 py-1 text-xs text-body hover:bg-soft">Refresh</button>
+      </div>
+      {error && <p className="mt-2 text-xs text-danger">{error}</p>}
+      {entries.length === 0 && !error && <p className="mt-2 text-xs text-mute">No entries yet.</p>}
+      {entries.length > 0 && (
+        <div className="mt-2 max-h-72 overflow-y-auto">
+          <table className="w-full text-left text-[11px]">
+            <thead className="text-mute"><tr><th className="py-1 pr-2">When</th><th className="pr-2">Who</th><th className="pr-2">Action</th><th>Status</th></tr></thead>
+            <tbody>
+              {entries.map((e) => (
+                <tr key={e.id} className="border-t border-line">
+                  <td className="py-1 pr-2 whitespace-nowrap text-mute">{new Date(e.ts).toLocaleString()}</td>
+                  <td className="pr-2 text-body">{e.username ?? "—"}{e.role ? <span className="text-mute"> · {e.role}</span> : null}</td>
+                  <td className="pr-2 font-mono text-ink">{e.method} {e.path}</td>
+                  <td className={e.status && e.status >= 400 ? "text-danger" : "text-success"}>{e.status ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TeamSettings() {
   const { loading, teamMode, user, refresh } = useAuth();
   const [busy, setBusy] = useState(false);
@@ -232,6 +272,7 @@ export function TeamSettings() {
             )}
           </div>
           <UsersTable />
+          {(user?.role === "owner" || user?.role === "admin") && <AuditCard />}
         </div>
       )}
     </div>

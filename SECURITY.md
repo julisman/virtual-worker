@@ -30,8 +30,12 @@ What the code enforces:
 What it does **not** do (yet):
 
 - Solo mode has no login. Anyone with shell access to the machine can use the API.
-  Team mode (accounts and roles) exists behind a flag and has not had its own
-  hardening pass; do not expose it to the internet.
+- Team mode (accounts and roles) adds a signed, HttpOnly, SameSite=strict session
+  cookie (Secure behind TLS), a role floor on every mutating route enforced in
+  middleware (viewer read-only, member operates workers, admin changes
+  installation-wide configuration and secrets, owner manages team mode), a login
+  rate limit, and an audit log of every change. It is still meant for a trusted
+  network behind a reverse proxy with TLS, not the open internet.
 - Exposing the backend beyond localhost (for the Cloud API webhook, for example) is your
   responsibility: put it behind a reverse proxy with TLS and set `VW_ALLOWED_HOSTS`.
 - The WhatsApp linked-device transport uses an unofficial client library. Use a

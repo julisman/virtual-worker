@@ -65,6 +65,11 @@ def prune_once() -> dict:
     step("media", lambda: prune_channel_media(config.CHANNEL_MEDIA_RETENTION_DAYS))
     step("ccr", ccr_store.purge_expired)
 
+    def audit():
+        from storage import audit_store
+        return audit_store.prune(config.AUDIT_RETENTION_DAYS)
+    step("audit", audit)
+
     def jobs():
         from routes.hub import evict_finished_jobs
         return evict_finished_jobs()

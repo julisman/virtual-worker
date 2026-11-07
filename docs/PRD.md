@@ -339,6 +339,7 @@ The product is built around five ideas:
 
 - FR-X1. Solo mode is localhost-only with no auth. Optional team mode adds accounts, roles
   and audit on a shared host; it is the one trust-boundary change and ships behind a flag.
+  _Hardening pass done 2026-11-07: role floor in middleware, audit log, login rate limit, secure cookie behind TLS._
 - FR-X2. Security baseline: strict CORS, auth gates on every mutating API in team mode,
   SSRF guard on fetch, path traversal checks, secrets redacted everywhere.
   _Implemented 2026-11-04: local-only CORS, Host allow-list, log redaction, webhook
@@ -465,8 +466,8 @@ external channel; capture and background loops are best-effort and never crash t
 | **M2 Board, schedules, delivery** | Board, activity, duty worker, cron and one-time schedules, file and webhook triggers, delivery targets (webhook, notification, email) and audit | A worker on duty works a board and delivers a result on schedule |
 | **M3 WhatsApp channel** — **implemented 2026-11-04** | Channel plugin interface, WhatsApp linked-device transport with QR pairing, policies, bindings, per-conversation sessions, media, outbound send tool, Cloud API transport | Message a worker from a phone; reply in the same chat; allow-list enforced; no public host |
 | **M4 Templates and knowledge** | Template format, gallery, deploy, export/import, knowledge bases, wikis, backup/restore | Deploy a Customer Support Rep that answers from uploaded docs in one sitting |
-| **M5 More channels and teams** — Telegram shipped 2026-11-04; BYOK providers, gateway, delegation flow-back and custom tools landed 2026-11-07 | Telegram, Discord, Slack adapters; delegation and inbox flow-back; custom tool builder; analytics; BYOK providers and gateway | Two workers collaborate on a delegated task from a group chat |
-| **M6 Packaging and trust** — service mode shipped 2026-11-04 (`./vw`) | Service mode, desktop build, team mode with accounts and audit, security hardening pass | Runs unattended for a week; passes the security checklist |
+| **M5 More channels and teams** — Telegram 2026-11-04; providers, gateway, flow-back, custom tools, Discord and Slack 2026-11-07 | Telegram, Discord, Slack adapters; delegation and inbox flow-back; custom tool builder; analytics; BYOK providers and gateway | Two workers collaborate on a delegated task from a group chat |
+| **M6 Packaging and trust** — service mode 2026-11-04, login service + `vw run` + team-mode hardening 2026-11-07; desktop build scaffold present | Service mode, desktop build, team mode with accounts and audit, security hardening pass | Runs unattended for a week; passes the security checklist |
 | **Later** | Fine-tuning from feedback, evaluation suites, voice, browser control and flow recorder, case management for support teams, hosted template index | |
 
 ## 14. Risks and mitigations

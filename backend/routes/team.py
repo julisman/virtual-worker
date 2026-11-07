@@ -9,7 +9,8 @@ thin read over agent_store + task_store + activity_store — no new run engine.
 
 import logging
 
-from fastapi import APIRouter
+import team
+from fastapi import APIRouter, Request
 
 from storage import activity_store, agent_store, task_store
 
@@ -39,3 +40,13 @@ async def overview(limit: int = 50):
         d["toName"] = names.get(det.get("to"))
         d["kind"] = det.get("kind")
     return {"agents": members, "delegations": delegations}
+
+
+@router.get("/audit")
+async def audit(request: Request, limit: int = 200, userId: str | None = None):
+    """Team-mode audit log (admin and above): who did what, when, with which outcome."""
+    from auth_deps import require_min_role
+    from storage import audit_store
+    if team.is_enabled():
+        require_min_role("admin")(request)
+    return {"entries": audit_store.list_recent(limit=limit, user_id=userId)}

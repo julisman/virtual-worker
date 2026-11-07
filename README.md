@@ -20,14 +20,16 @@ MCP server, a remote upstream, or a connected chat channel.
 
 ## What it does today
 
-- **Chat channels**: message an agent from **WhatsApp** or **Telegram**. WhatsApp pairs a
-  number by scanning a QR code (linked device, no public URL needed) or uses the official
-  Cloud API webhook; Telegram takes a bot token and long-polls. DM and group policies, an
-  allow-list with pairing approval, per-chat agent routing, per-conversation history, media
-  in and out, and an audited `channel_send` tool for proactive messages. The adapter
-  interface is the plugin point for Discord and Slack.
+- **Chat channels**: message an agent from **WhatsApp**, **Telegram**, **Discord** or
+  **Slack**. WhatsApp pairs a number by scanning a QR code (linked device, no public URL
+  needed) or uses the official Cloud API webhook; Telegram, Discord and Slack take bot
+  tokens and dial out. DM and group policies, an allow-list with pairing approval,
+  per-chat agent routing, per-conversation history, media in and out, and an audited
+  `channel_send` tool for proactive messages. One adapter interface for all of them.
 - **Service mode**: `./vw start` runs everything detached with automatic restarts and the
-  built UI on one port, so a worker keeps answering after you close the terminal.
+  built UI on one port; `./vw install-service` makes it start at login or boot (launchd on
+  macOS, systemd on Linux); `./vw run <agent> "<prompt>"` runs an agent headlessly from
+  the terminal.
 - **Agents** with a persona, model, working folder, memory, skills, MCP servers, custom
   tools, and guardrails. Chat with them in the web UI with streaming tool activity.
 - **Agent harness**: tool registry, agent loop, context budgeting, automatic guardrails
@@ -66,7 +68,8 @@ MCP server, a remote upstream, or a connected chat channel.
   API tokens.
 - **Traces**: every model call captured locally with tokens, cost, latency and tool
   calls. Analytics and monitoring on top.
-- **Optional team mode** with accounts and roles for a shared host. Off by default.
+- **Optional team mode** with accounts, roles enforced on every mutating route, a login
+  rate limit and an audit log, for a shared host. Off by default.
 - **Backup and restore** of the whole data directory.
 
 ## Run
@@ -130,6 +133,12 @@ All local state lives under `VW_HOME` (default `~/.virtual-worker`; `dev.sh` set
 **Channels → Connect a channel → Telegram**, paste the token, pick the default agent. Done.
 No public URL is needed; the bot long-polls.
 
+**Discord**: create an application in the Developer Portal, add a bot, enable the Message
+Content intent, invite it to your server, and paste the bot token under **Channels**.
+
+**Slack**: create an app, enable Socket Mode (app-level token), subscribe to `message.im`,
+`message.channels` and `app_mention`, install it, and paste both tokens under **Channels**.
+
 **WhatsApp (linked device):**
 
 1. Open **Channels → Connect a channel**, choose **WhatsApp (linked device)**, pick the
@@ -165,10 +174,9 @@ cd frontend && npm run build
 
 The product plan lives in [`docs/PRD.md`](docs/PRD.md). Next milestones:
 
-1. Discord and Slack channels on the same adapter interface; delegation with flow-back
-   into the originating chat.
-2. Security hardening pass and desktop packaging.
-3. Knowledge wikis, template registries, analytics budgets.
+1. Real-device validation of each channel and the first public release.
+2. Desktop packaging and signed builds.
+3. Evaluation suites and fine-tuning from feedback (deferred by the PRD).
 
 ## Contributing
 
