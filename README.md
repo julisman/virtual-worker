@@ -155,7 +155,7 @@ No public URL is needed; the bot long-polls.
 Content intent, invite it to your server, and paste the bot token under **Channels**.
 
 **Slack**: create an app, enable Socket Mode (app-level token), subscribe to `message.im`,
-`message.channels` and `app_mention`, install it, and paste both tokens under **Channels**.
+`message.channels`, install it, and paste both tokens under **Channels**.
 
 **WhatsApp (linked device):**
 

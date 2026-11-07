@@ -1,12 +1,16 @@
 """Discord — a bot over the Gateway WebSocket + REST (no public URL).
 
 One account = one bot token (write-only secret ``botToken``). The adapter dials
-out to the Gateway, identifies with the message intents, heartbeats, and
-re-identifies with backoff on any drop. Inbound ``MESSAGE_CREATE`` events become
-normalized messages; replies go through the REST API with a message reference so
-they thread visually under the message they answer. Guild channels follow the
-account's group policy (``mention`` = reply only when the bot is @mentioned);
-DMs follow the DM policy.
+out to the Gateway, identifies with the message intents, heartbeats, resumes the
+session after a drop when Discord allows it and re-identifies otherwise.
+Inbound ``MESSAGE_CREATE`` events become normalized messages; replies go through
+the REST API with a message reference so they thread visually under the message
+they answer. Guild channels follow the account's group policy (``mention`` =
+reply only when the bot is @mentioned); DMs follow the DM policy.
+
+Safety: outbound messages never ping anyone (``allowed_mentions`` is empty), so
+model text containing ``@everyone`` or a role mention is rendered inert.
+Attachments are only downloaded once the manager has accepted the message.
 
 Setup (Discord Developer Portal): create an application → Bot → copy the token,
 enable the **Message Content** privileged intent, then invite the bot to a
@@ -21,14 +25,12 @@ import logging
 import mimetypes
 import os
 import re
-import uuid
-from pathlib import Path
 from typing import Callable
 
 import httpx
 
 from channels import base
-from channels.base import Attachment, ChannelAdapter, InboundMessage, registry
+from channels.base import Attachment, InboundMessage, WebSocketAdapter, registry
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,18 @@ API = "https://discord.com/api/v10"
 INTENTS = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15)   # GUILDS, GUILD_MESSAGES, DIRECT_MESSAGES, MESSAGE_CONTENT
 MAX_MEDIA_BYTES = int(os.environ.get("VW_DISCORD_MAX_MEDIA_BYTES", str(25 * 1024 * 1024)))
 MAX_TEXT = 1900   # Discord caps at 2000
+NO_MENTIONS = {"parse": [], "replied_user": False}
+
+# Gateway close codes after which reconnecting cannot help (bad token, bad or
+# disallowed intents, bad API version). https://discord.com/developers/docs/topics/opcodes-and-status-codes
+FATAL_CLOSE = {
+    4004: "authentication failed: the bot token is wrong",
+    4010: "invalid shard",
+    4011: "sharding required: this bot is in too many guilds for one connection",
+    4012: "invalid gateway API version",
+    4013: "invalid intents",
+    4014: "disallowed intents: enable the Message Content intent for this bot in the Developer Portal",
+}
 
 
 def parse_message_create(account_id: str, d: dict, *, bot_id: str) -> InboundMessage | None:
@@ -66,7 +80,7 @@ def parse_message_create(account_id: str, d: dict, *, bot_id: str) -> InboundMes
 
 
 @registry.register
-class DiscordAdapter(ChannelAdapter):
+class DiscordAdapter(WebSocketAdapter):
     kind = "discord"
     label = "Discord"
     description = ("A Discord bot via the Gateway. Create an application in the Developer Portal, "
@@ -78,18 +92,16 @@ class DiscordAdapter(ChannelAdapter):
                     "pairing": False, "webhook": False, "markdown": "discord"}
     max_text_len = MAX_TEXT
 
-    #: Test seams.
+    #: Test seam.
     client_factory: Callable[[], httpx.AsyncClient] = staticmethod(
         lambda: httpx.AsyncClient(timeout=httpx.Timeout(30, connect=15)))
-    ws_connect = None   # async callable(url) -> websocket-like (recv/send/close); None = websockets.connect
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
-        self._stop = asyncio.Event()
-        self._task: asyncio.Task | None = None
         self._bot_id = ""
-        self._ws = None
         self._seq: int | None = None
+        self._session_id: str | None = None      # from READY; enables RESUME
+        self._resume_url: str | None = None
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bot {self.secrets.get('botToken', '')}"}
@@ -99,65 +111,77 @@ class DiscordAdapter(ChannelAdapter):
         if not self.secrets.get("botToken"):
             self._set_status("error", error="missing bot token")
             return
-        self._stop.clear()
         self._set_status("connecting")
-        self._task = asyncio.get_event_loop().create_task(
-            base.run_with_backoff(f"discord:{self.account.get('id')}", self._session, self._stop))
+        self._run(f"discord:{self.account.get('id')}", self._session)
 
-    async def stop(self) -> None:
-        self._stop.set()
-        ws = self._ws
-        self._ws = None
-        if ws is not None:
-            try:
-                await ws.close()
-            except Exception:  # noqa: BLE001
-                pass
-        if self._task:
-            self._task.cancel()
-            self._task = None
-        self._set_status("off")
-
-    async def _connect(self, url: str):
-        if self.ws_connect is not None:
-            return await self.ws_connect(url)
-        import websockets
-        return await websockets.connect(url, max_size=8 * 1024 * 1024)
+    def _forget_session(self) -> None:
+        self._session_id = None
+        self._resume_url = None
+        self._seq = None
 
     async def _session(self) -> None:
+        resuming = bool(self._session_id and self._resume_url)
         async with self.client_factory() as c:
-            r = await c.get(f"{API}/gateway/bot", headers=self._headers())
-            if r.status_code != 200:
-                self._set_status("error", error=f"gateway/bot {r.status_code}: {r.text[:120]}")
-                raise RuntimeError("discord gateway lookup failed")
-            url = r.json().get("url") or "wss://gateway.discord.gg"
-            ws = await self._connect(f"{url}/?v=10&encoding=json")
+            if resuming:
+                url = self._resume_url or ""
+            else:
+                r = await c.get(f"{API}/gateway/bot", headers=self._headers())
+                if r.status_code != 200:
+                    self._set_status("error", error=f"gateway/bot {r.status_code}: {r.text[:120]}")
+                    raise RuntimeError("discord gateway lookup failed")
+                url = r.json().get("url") or "wss://gateway.discord.gg"
+            ws = await self._connect(f"{url.rstrip('/')}/?v=10&encoding=json")
             self._ws = ws
             heartbeat_task: asyncio.Task | None = None
+            ready = False
             try:
                 while not self._stop.is_set():
-                    raw = await ws.recv()
+                    try:
+                        raw = await ws.recv()
+                    except Exception as exc:  # noqa: BLE001 — closed socket
+                        code, reason = base.close_code(exc)
+                        if code in FATAL_CLOSE:
+                            self._forget_session()
+                            self._set_status("error", error=f"gateway closed ({code}): {FATAL_CLOSE[code]}")
+                            self._stop.set()            # no point retrying with the same config
+                            return
+                        raise RuntimeError(f"gateway closed ({code or '?'}) {reason}".strip()) from exc
                     msg = json.loads(raw)
                     op, t, d = msg.get("op"), msg.get("t"), msg.get("d")
                     if msg.get("s") is not None:
                         self._seq = msg["s"]
-                    if op == 10:   # HELLO → identify + heartbeat
+                    if op == 10:   # HELLO → identify (or resume) + heartbeat
                         interval = float((d or {}).get("heartbeat_interval", 41250)) / 1000.0
-                        await ws.send(json.dumps({"op": 2, "d": {
-                            "token": self.secrets.get("botToken", ""), "intents": INTENTS,
-                            "properties": {"os": "virtual-worker", "browser": "virtual-worker", "device": "virtual-worker"}}}))
+                        if resuming:
+                            await ws.send(json.dumps({"op": 6, "d": {
+                                "token": self.secrets.get("botToken", ""),
+                                "session_id": self._session_id, "seq": self._seq}}))
+                        else:
+                            await ws.send(json.dumps({"op": 2, "d": {
+                                "token": self.secrets.get("botToken", ""), "intents": INTENTS,
+                                "properties": {"os": "virtual-worker", "browser": "virtual-worker", "device": "virtual-worker"}}}))
                         heartbeat_task = asyncio.get_event_loop().create_task(self._heartbeat(ws, interval))
                     elif op == 11:   # heartbeat ack
                         continue
-                    elif op == 7 or op == 9:   # reconnect / invalid session
-                        raise RuntimeError(f"discord asked to reconnect (op {op})")
+                    elif op == 7:    # reconnect: return cleanly, the next session resumes
+                        return
+                    elif op == 9:    # invalid session; d == true means resumable
+                        if not d:
+                            self._forget_session()
+                        raise RuntimeError("discord invalidated the session")
                     elif op == 0 and t == "READY":
                         user = (d or {}).get("user") or {}
                         self._bot_id = str(user.get("id") or "")
+                        self._session_id = (d or {}).get("session_id") or None
+                        self._resume_url = (d or {}).get("resume_gateway_url") or None
+                        ready = True
                         self._set_status("open", me=self._bot_id, name=user.get("username"), detail="gateway connected")
+                    elif op == 0 and t == "RESUMED":
+                        ready = True
+                        self._set_status("open", me=self._bot_id, detail="gateway resumed")
                     elif op == 0 and t == "MESSAGE_CREATE":
                         try:
-                            await self._on_message(c, d or {})
+                            await self._on_message(d or {})
                         except Exception:  # noqa: BLE001
                             logger.debug("discord message handling failed", exc_info=True)
             finally:
@@ -168,6 +192,8 @@ class DiscordAdapter(ChannelAdapter):
                 except Exception:  # noqa: BLE001
                     pass
                 self._ws = None
+                if resuming and not ready:
+                    self._forget_session()      # resume rejected → identify fresh next time
                 if not self._stop.is_set():
                     self._set_status("reconnecting", detail="gateway closed")
 
@@ -181,36 +207,24 @@ class DiscordAdapter(ChannelAdapter):
         except Exception:  # noqa: BLE001
             return
 
-    async def _on_message(self, c: httpx.AsyncClient, d: dict) -> None:
+    async def _on_message(self, d: dict) -> None:
         msg = parse_message_create(self.account.get("id", ""), d, bot_id=self._bot_id)
         if msg is None:
             return
-        for media in (msg.raw or {}).get("media") or []:
-            path = await self._download(c, media)
-            if path:
-                mime = media.get("mime") or ""
-                msg.attachments.append(Attachment(path=path, mime=mime, name=media.get("name") or os.path.basename(path),
-                                                  kind="image" if mime.startswith("image/") else "document", caption=msg.text))
+        media = (msg.raw or {}).get("media") or []
+        if media:
+            async def load(media=media, caption=msg.text):
+                out: list[Attachment] = []
+                async with self.client_factory() as c:
+                    for m in media:
+                        path = await base.download_to_media_dir(
+                            c, m["url"], data_dir=self.data_dir, cap=MAX_MEDIA_BYTES,
+                            name=m.get("name") or "", mime=m.get("mime") or "", size=m.get("size") or 0)
+                        if path:
+                            out.append(base.attachment_from_media(path, m, caption))
+                return out
+            msg.attachment_loader = load
         await self.on_inbound(msg)
-
-    async def _download(self, c: httpx.AsyncClient, media: dict) -> str | None:
-        if (media.get("size") or 0) > MAX_MEDIA_BYTES:
-            return None
-        media_dir = Path(self.data_dir) / "media"
-        media_dir.mkdir(parents=True, exist_ok=True)
-        ext = Path(media.get("name") or "").suffix or mimetypes.guess_extension(media.get("mime") or "") or ""
-        out = media_dir / f"{uuid.uuid4().hex[:12]}{ext}"
-        size = 0
-        async with c.stream("GET", media["url"]) as r:
-            if r.status_code != 200:
-                return None
-            with open(out, "wb") as fh:
-                async for chunk in r.aiter_bytes():
-                    size += len(chunk)
-                    if size > MAX_MEDIA_BYTES:
-                        fh.close(); out.unlink(missing_ok=True); return None
-                    fh.write(chunk)
-        return str(out)
 
     # ---- messaging ---------------------------------------------------------- #
     async def send(self, target: str, text: str, *, reply_to: str | None = None,
@@ -221,19 +235,21 @@ class DiscordAdapter(ChannelAdapter):
         if not channel_id:
             raise RuntimeError("target channel id is required")
         last = "sent"
+        url = f"{API}/channels/{channel_id}/messages"
         async with self.client_factory() as c:
             if text:
-                body: dict = {"content": text}
+                body: dict = {"content": text, "allowed_mentions": NO_MENTIONS}
                 if reply_to and reply_to.isdigit():
                     body["message_reference"] = {"message_id": reply_to, "fail_if_not_exists": False}
-                r = await c.post(f"{API}/channels/{channel_id}/messages", json=body, headers=self._headers())
+                r = await base.post_with_retry(c, url, json=body, headers=self._headers())
                 last = self._result_id(r)
             for a in attachments or []:
                 mime = a.mime or mimetypes.guess_type(a.path)[0] or "application/octet-stream"
                 with open(a.path, "rb") as fh:
-                    r = await c.post(f"{API}/channels/{channel_id}/messages", headers=self._headers(),
-                                     data={"payload_json": json.dumps({"content": a.caption or ""})},
-                                     files={"files[0]": (a.name or os.path.basename(a.path), fh, mime)})
+                    r = await base.post_with_retry(
+                        c, url, headers=self._headers(),
+                        data={"payload_json": json.dumps({"content": a.caption or "", "allowed_mentions": NO_MENTIONS})},
+                        files={"files[0]": (a.name or os.path.basename(a.path), fh, mime)})
                 last = self._result_id(r)
         return last
 

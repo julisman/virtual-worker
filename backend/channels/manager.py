@@ -165,7 +165,7 @@ class ChannelManager:
             self._status[account_id] = {"state": "error", "error": f"unknown channel kind {acct['kind']!r}"}
             return self._status[account_id]
         adapter = cls(acct, chat_channel_store.get_secrets(account_id),
-                      on_inbound=self.handle_inbound, on_status=self._on_status,
+                      on_inbound=self.dispatch_inbound, on_status=self._on_status,
                       data_dir=self._data_dir(account_id))
         self._adapters[account_id] = adapter
         try:
@@ -207,16 +207,23 @@ class ChannelManager:
     # inbound pipeline
     # ------------------------------------------------------------------ #
     async def handle_inbound(self, msg: InboundMessage) -> None:
-        """Entry point adapters call for every message. Never raises."""
+        """Process one message to completion (policy, debounce, turn, reply).
+        Never raises. Adapters use :meth:`dispatch_inbound` instead so their
+        socket reader is never blocked for the length of a model run."""
         try:
             await self._handle(msg)
         except Exception:  # noqa: BLE001
             logger.warning("channel inbound handling failed", exc_info=True)
 
+    async def dispatch_inbound(self, msg: InboundMessage) -> None:
+        """Schedule :meth:`handle_inbound` on its own task and return at once.
+        Per-conversation order is still kept by the debounce buffer + lock."""
+        self._spawn(self.handle_inbound(msg))
+
     async def _handle(self, msg: InboundMessage) -> None:
         if msg.from_me:
             return
-        if not (msg.text or msg.attachments):
+        if not msg.has_content():
             return
         acct = chat_channel_store.get_account(msg.account_id)
         if not acct or not acct["enabled"]:
@@ -240,6 +247,11 @@ class ChannelManager:
                                  reply_to=msg.event_id, source="policy")
             return
         if verdict != "allow":
+            return
+        # Media is fetched only now, after policy: observed group chatter never
+        # costs bandwidth or disk.
+        await msg.load_attachments()
+        if not (msg.text or msg.attachments):
             return
         # Debounce: collect rapid consecutive messages from the same conversation.
         key = msg.session_key

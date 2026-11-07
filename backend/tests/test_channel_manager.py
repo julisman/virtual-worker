@@ -247,3 +247,65 @@ def test_disabled_account_ignores_everything(env):
 
     mgr_mod.execute_turn = boom
     asyncio.run(m.handle_inbound(_msg(acct, "x")))
+
+
+def test_dispatch_inbound_does_not_block_the_caller(env):
+    m, acct = env["m"], env["acct"]
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_turn(a, messages, session_id):
+        started.set()
+        await release.wait()
+        return "done", None
+
+    mgr_mod.execute_turn = slow_turn
+
+    async def main():
+        await m.start_account(acct["id"])
+        t0 = asyncio.get_event_loop().time()
+        await m.dispatch_inbound(_msg(acct, "hi"))           # returns at once
+        assert asyncio.get_event_loop().time() - t0 < 0.5
+        await asyncio.wait_for(started.wait(), 2)
+        release.set()
+        ad = m.adapter(acct["id"])
+        for _ in range(100):
+            if ad.sent:
+                break
+            await asyncio.sleep(0.02)
+        assert ad.sent and ad.sent[0][1] == "done"
+        await m.stop()
+
+    asyncio.run(main())
+
+
+def test_attachments_load_only_after_policy_allows(env):
+    m, acct = env["m"], env["acct"]
+    store.update_account(acct["id"], config={**acct["config"], "groupPolicy": "mention"})
+    loads = []
+    seen = []
+
+    async def turn(a, messages, session_id):
+        seen.append(messages)
+        return "ok", None
+
+    mgr_mod.execute_turn = turn
+
+    def with_loader(msg):
+        async def load():
+            loads.append(msg.event_id)
+            return [Attachment(path="/tmp/x.png", mime="image/png", name="x.png", kind="image")]
+        msg.attachment_loader = load
+        return msg
+
+    async def main():
+        await m.start_account(acct["id"])
+        # Group chatter without a mention: ignored, media never fetched.
+        await m.handle_inbound(with_loader(_msg(acct, "chatter", kind="group", conv="g1", event="g-1")))
+        assert loads == [] and seen == []
+        # A DM is allowed: the loader runs and the attachment reaches the turn.
+        await m.handle_inbound(with_loader(_msg(acct, "", event="d-1")))
+        assert loads == ["d-1"] and len(seen) == 1
+        await m.stop()
+
+    asyncio.run(main())

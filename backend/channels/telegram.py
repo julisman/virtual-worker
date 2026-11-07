@@ -18,8 +18,6 @@ import asyncio
 import logging
 import mimetypes
 import os
-import uuid
-from pathlib import Path
 from typing import Callable
 
 import httpx
@@ -169,11 +167,11 @@ class TelegramAdapter(ChannelAdapter):
             return
         media = (msg.raw or {}).get("media")
         if media and media.get("file_id"):
-            path = await self._download(c, media)
-            if path:
-                msg.attachments.append(Attachment(path=path, mime=media.get("mime") or "",
-                                                  name=media.get("name") or os.path.basename(path),
-                                                  kind=media.get("kind") or "file", caption=msg.text))
+            async def load(media=media, caption=msg.text):
+                async with self.client_factory() as cc:
+                    path = await self._download(cc, media)
+                return [base.attachment_from_media(path, media, caption)] if path else []
+            msg.attachment_loader = load
         await self.on_inbound(msg)
 
     async def _download(self, c: httpx.AsyncClient, media: dict) -> str | None:
@@ -183,23 +181,10 @@ class TelegramAdapter(ChannelAdapter):
         if r.status_code != 200 or not r.json().get("ok"):
             return None
         fpath = r.json()["result"].get("file_path") or ""
-        media_dir = Path(self.data_dir) / "media"
-        media_dir.mkdir(parents=True, exist_ok=True)
-        ext = Path(media.get("name") or fpath).suffix or mimetypes.guess_extension(media.get("mime") or "") or ""
-        out = media_dir / f"{uuid.uuid4().hex[:12]}{ext}"
-        size = 0
-        async with c.stream("GET", f"{API}/file/bot{self.secrets.get('botToken', '')}/{fpath}") as resp:
-            if resp.status_code != 200:
-                return None
-            with open(out, "wb") as fh:
-                async for chunk in resp.aiter_bytes():
-                    size += len(chunk)
-                    if size > MAX_MEDIA_BYTES:
-                        fh.close()
-                        out.unlink(missing_ok=True)
-                        return None
-                    fh.write(chunk)
-        return str(out)
+        return await base.download_to_media_dir(
+            c, f"{API}/file/bot{self.secrets.get('botToken', '')}/{fpath}",
+            data_dir=self.data_dir, cap=MAX_MEDIA_BYTES, name=media.get("name") or fpath,
+            mime=media.get("mime") or "")
 
     # ---- messaging ---------------------------------------------------------- #
     async def send(self, target: str, text: str, *, reply_to: str | None = None,

@@ -18,6 +18,10 @@ Design rules (PRD §8.6):
 from __future__ import annotations
 
 import asyncio
+import mimetypes
+import os
+import uuid
+from pathlib import Path
 import logging
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
@@ -52,6 +56,24 @@ class InboundMessage:
     mentioned: bool = False       # the bot was @mentioned (groups)
     from_me: bool = False         # sent by the connected account itself
     raw: dict = field(default_factory=dict)
+    # Adapters that must *fetch* media set this instead of downloading up front;
+    # the manager awaits it only once the message has passed policy, so a busy
+    # group the bot merely observes never fills the media directory.
+    attachment_loader: Callable[[], Awaitable[list["Attachment"]]] | None = field(
+        default=None, repr=False, compare=False)
+
+    def has_content(self) -> bool:
+        return bool(self.text or self.attachments or self.attachment_loader)
+
+    async def load_attachments(self) -> None:
+        """Run the deferred loader (once) and append what it returns."""
+        loader, self.attachment_loader = self.attachment_loader, None
+        if loader is None:
+            return
+        try:
+            self.attachments.extend(await loader())
+        except Exception:  # noqa: BLE001
+            logger.warning("attachment download failed for %s", self.event_id, exc_info=True)
 
     @property
     def session_key(self) -> str:
@@ -193,18 +215,137 @@ async def run_with_backoff(name: str, fn: Callable[[], Awaitable[None]],
     import random
     delay = base
     while not stop.is_set():
+        clean = False
         try:
             await fn()
             delay = base  # a clean return resets the backoff
+            clean = True
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
             logger.warning("%s: connection loop error: %s", name, exc)
         if stop.is_set():
             break
-        wait = min(cap, delay) * (0.8 + 0.4 * random.random())
+        # A clean return means the server asked us to reconnect (Slack
+        # ``disconnect``, Discord op 7): open the replacement right away.
+        wait = 0.2 if clean else min(cap, delay) * (0.8 + 0.4 * random.random())
         try:
             await asyncio.wait_for(stop.wait(), timeout=wait)
         except asyncio.TimeoutError:
             pass
         delay = min(cap, delay * 2)
+
+
+async def download_to_media_dir(client, url: str, *, data_dir: str, cap: int,
+                                name: str = "", mime: str = "", size: int = 0,
+                                headers: dict | None = None) -> str | None:
+    """Stream ``url`` into ``<data_dir>/media/<random><ext>`` with a byte cap.
+    Returns the path, or ``None`` when the file is too large, the fetch fails,
+    or the stream overruns the cap (the partial file is removed)."""
+    if size and size > cap:
+        return None
+    media_dir = Path(data_dir) / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    ext = Path(name or "").suffix or mimetypes.guess_extension(mime or "") or ""
+    out = media_dir / f"{uuid.uuid4().hex[:12]}{ext}"
+    written = 0
+    try:
+        async with client.stream("GET", url, headers=headers or {}) as r:
+            if r.status_code != 200:
+                return None
+            with open(out, "wb") as fh:
+                async for chunk in r.aiter_bytes():
+                    written += len(chunk)
+                    if written > cap:
+                        fh.close()
+                        out.unlink(missing_ok=True)
+                        return None
+                    fh.write(chunk)
+    except Exception:  # noqa: BLE001
+        out.unlink(missing_ok=True)
+        raise
+    return str(out)
+
+
+def attachment_from_media(path: str, media: dict, caption: str = "") -> "Attachment":
+    mime = media.get("mime") or ""
+    return Attachment(path=path, mime=mime, name=media.get("name") or os.path.basename(path),
+                      kind=media.get("kind") or ("image" if mime.startswith("image/") else "document"),
+                      caption=caption)
+
+
+def _retry_after_seconds(r) -> float | None:
+    """Seconds to wait after a 429, from the header or a JSON ``retry_after``."""
+    hdr = r.headers.get("Retry-After") or r.headers.get("X-RateLimit-Reset-After")
+    if hdr:
+        try:
+            return float(hdr)
+        except ValueError:
+            pass
+    try:
+        body = r.json()
+        if isinstance(body, dict) and body.get("retry_after") is not None:
+            return float(body["retry_after"])
+    except Exception:  # noqa: BLE001
+        pass
+    return 1.0
+
+
+async def post_with_retry(client, url: str, *, attempts: int = 3, max_wait: float = 10.0, **kw):
+    """``client.post`` that honours one or two 429 replies by sleeping for the
+    advertised ``retry_after`` (capped) before retrying. Other statuses return."""
+    r = None
+    for i in range(max(1, attempts)):
+        r = await client.post(url, **kw)
+        if r.status_code != 429 or i == attempts - 1:
+            return r
+        wait = min(max_wait, _retry_after_seconds(r) or 1.0)
+        logger.info("rate limited by %s; retrying in %.1fs", url, wait)
+        await asyncio.sleep(wait)
+    return r
+
+
+class WebSocketAdapter(ChannelAdapter):
+    """Shared lifecycle for adapters that hold one long-lived WebSocket
+    (Discord Gateway, Slack Socket Mode): a stop event, the supervising task,
+    the current socket, and a ``ws_connect`` test seam."""
+
+    #: Test seam: async callable(url) -> websocket-like (recv/send/close); None = websockets.connect
+    ws_connect = None
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task | None = None
+        self._ws = None
+
+    def _run(self, name: str, session) -> None:
+        self._stop.clear()
+        self._task = asyncio.get_event_loop().create_task(run_with_backoff(name, session, self._stop))
+
+    async def stop(self) -> None:
+        self._stop.set()
+        ws, self._ws = self._ws, None
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if self._task:
+            self._task.cancel()
+            self._task = None
+        self._set_status("off")
+
+    async def _connect(self, url: str):
+        if self.ws_connect is not None:
+            return await self.ws_connect(url)
+        import websockets
+        return await websockets.connect(url, max_size=8 * 1024 * 1024)
+
+
+def close_code(exc: BaseException) -> tuple[int | None, str]:
+    """``(code, reason)`` from a websockets ``ConnectionClosed`` (any version)."""
+    rcvd = getattr(exc, "rcvd", None)
+    if rcvd is not None:
+        return getattr(rcvd, "code", None), getattr(rcvd, "reason", "") or ""
+    return getattr(exc, "code", None), getattr(exc, "reason", "") or ""

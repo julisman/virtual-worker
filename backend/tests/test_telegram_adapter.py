@@ -94,6 +94,8 @@ def test_round_trip_over_mock_transport(tmp_path, monkeypatch):
         assert ad.status()["state"] == "open" and ad.status()["me"] == "42" and ad.status()["name"] == "@MyBot"
         assert ad.self_ids() == {"42"}
         assert inbound[0].text == "hello" and inbound[0].session_key == "telegram:acct:12345"
+        assert not inbound[1].attachments and inbound[1].attachment_loader  # deferred until policy allows
+        await inbound[1].load_attachments()
         assert inbound[1].attachments and inbound[1].attachments[0].kind == "image"
         assert open(inbound[1].attachments[0].path, "rb").read() == b"PNGDATA"
         # offset advanced past the two updates
