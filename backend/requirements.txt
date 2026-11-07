@@ -11,6 +11,8 @@ playwright>=1.40
 # Document tools (PRD-18) — PDF text extraction (pure Python; .docx/.xlsx/.pptx
 # are parsed with the stdlib).
 pypdf>=4.0
+# Chat channels that hold a bot WebSocket (Discord gateway, Slack Socket Mode)
+websockets>=12.0
 # At-rest encryption of plaintext reasoning sidecars (PRD-27) — AES-GCM. Already
 # present transitively; declared explicitly since we import it directly.
 cryptography>=42.0

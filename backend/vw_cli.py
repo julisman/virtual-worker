@@ -5,6 +5,9 @@
     vw restart
     vw status                                            pid, health, ports, uptime
     vw logs [-n 200] [-f]                                service log
+    vw run <agent> "<prompt>" [--session id] [--json]    headless one-shot run via the API
+    vw install-service [--port 8888]                     start at login/boot (launchd / systemd --user)
+    vw uninstall-service
     vw supervise                                         (internal) foreground supervisor loop
 
 Service mode runs ``uvicorn app:app`` **without --reload** and serves the built
@@ -136,6 +139,10 @@ def _stop_llama(home: Path) -> None:
 
 def cmd_stop(args) -> int:
     home = _home(args)
+    _kind, unit = service_paths()
+    if unit.exists():
+        print(f"note: a login service is installed ({unit}); it will restart the backend. "
+              f"Use `vw uninstall-service` to stop it for good.", file=sys.stderr)
     st = _read_state(home)
     if not st or not pid_alive(st.get("pid")):
         print("not running")
@@ -225,6 +232,193 @@ def cmd_supervise(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# vw run — headless one-shot agent run through the running service
+# --------------------------------------------------------------------------- #
+
+def _api(port: int, path: str, body: dict | None = None, timeout: float = 30):
+    data = json.dumps(body).encode() if body is not None else None
+    r = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data,
+                               headers={"Content-Type": "application/json"},
+                               method="POST" if body is not None else "GET")
+    with urllib.request.urlopen(r, timeout=timeout) as resp:
+        return json.loads(resp.read().decode() or "null")
+
+
+def resolve_agent(agents: list[dict], ref: str) -> dict | None:
+    """Match by id, exact name, or unique case-insensitive name prefix."""
+    ref = (ref or "").strip()
+    for a in agents:
+        if a.get("id") == ref:
+            return a
+    exact = [a for a in agents if (a.get("name") or "").lower() == ref.lower()]
+    if len(exact) == 1:
+        return exact[0]
+    prefix = [a for a in agents if (a.get("name") or "").lower().startswith(ref.lower())]
+    return prefix[0] if len(prefix) == 1 else None
+
+
+def cmd_run(args) -> int:
+    port = args.port
+    try:
+        agents = _api(port, "/api/agents").get("agents", [])
+    except Exception as exc:  # noqa: BLE001
+        print(f"cannot reach Virtual Worker on :{port} ({exc}) — start it with `vw start`, "
+              f"or pass --port 8889 for a ./dev.sh instance", file=sys.stderr)
+        return 2
+    agent = resolve_agent(agents, args.agent)
+    if not agent:
+        names = ", ".join(a.get("name") or a.get("id") for a in agents) or "(none)"
+        print(f"no agent matches {args.agent!r}; agents: {names}", file=sys.stderr)
+        return 2
+    prompt = " ".join(args.prompt).strip() or sys.stdin.read().strip()
+    if not prompt:
+        print("prompt is required (argument or stdin)", file=sys.stderr)
+        return 2
+    session = args.session or f"chat:cli-{int(time.time())}"
+    body = json.dumps({"agentId": agent["id"], "messages": [{"role": "user", "content": prompt}]}).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/chat", data=body, method="POST",
+                                 headers={"Content-Type": "application/json", "x-vw-session": session})
+    rc = 0
+    try:
+        with urllib.request.urlopen(req, timeout=args.timeout) as resp:
+            for line in resp:
+                line = line.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    ev = json.loads(line[5:].strip())
+                except ValueError:
+                    continue
+                if args.json:
+                    print(json.dumps(ev), flush=True)
+                    if ev.get("type") == "error":
+                        rc = 1
+                    continue
+                t = ev.get("type")
+                if t == "text":
+                    sys.stdout.write(ev.get("delta", "")); sys.stdout.flush()
+                elif t == "text_reset":
+                    sys.stdout.write("\n")
+                elif t == "tool_call":
+                    print(f"[tool] {ev.get('name')} {json.dumps(ev.get('args') or {})[:160]}", file=sys.stderr, flush=True)
+                elif t == "error":
+                    print(f"\n[error] {ev.get('message')}", file=sys.stderr, flush=True); rc = 1
+            if not args.json:
+                sys.stdout.write("\n")
+    except Exception as exc:  # noqa: BLE001
+        print(f"run failed: {exc}", file=sys.stderr)
+        return 1
+    return rc
+
+
+# --------------------------------------------------------------------------- #
+# vw install-service — start at login / boot and survive reboots
+# --------------------------------------------------------------------------- #
+
+LAUNCHD_LABEL = "dev.virtualworker.service"
+SYSTEMD_UNIT = "virtual-worker.service"
+
+
+def render_launchd(python: str, cli: str, home: Path, port: int, llama_port: int, log: Path) -> str:
+    path_env = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + str(Path.home() / ".local" / "bin")
+    args = [python, cli, "supervise", "--home", str(home), "--port", str(port), "--llama-port", str(llama_port)]
+    items = "".join(f"\n      <string>{a}</string>" for a in args)
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>{items}
+  </array>
+  <key>WorkingDirectory</key><string>{Path(cli).parent}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>{path_env}</string>
+    <key>HOME</key><string>{Path.home()}</string>
+    <key>VW_HOME</key><string>{home}</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+"""
+
+
+def render_systemd(python: str, cli: str, home: Path, port: int, llama_port: int) -> str:
+    exec_start = f"{python} {cli} supervise --home {home} --port {port} --llama-port {llama_port}"
+    return f"""[Unit]
+Description=Virtual Worker — local-first AI workers
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={Path(cli).parent}
+Environment=VW_HOME={home}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:{Path.home() / ".local" / "bin"}
+ExecStart={exec_start}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def service_paths() -> tuple[str, Path]:
+    """(kind, unit file path) for this platform."""
+    if sys.platform == "darwin":
+        return "launchd", Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+    return "systemd", Path.home() / ".config" / "systemd" / "user" / SYSTEMD_UNIT
+
+
+def cmd_install_service(args) -> int:
+    home = _home(args)
+    kind, unit = service_paths()
+    unit.parent.mkdir(parents=True, exist_ok=True)
+    log = _log_file(home)
+    cli = str(BACKEND_DIR / "vw_cli.py")
+    if kind == "launchd":
+        unit.write_text(render_launchd(_python(), cli, home, args.port, args.llama_port, log))
+        uid = os.getuid()
+        subprocess.run(["launchctl", "bootout", f"gui/{uid}", str(unit)], capture_output=True)
+        r = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", str(unit)], capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"wrote {unit} but launchctl bootstrap failed: {r.stderr.strip()}", file=sys.stderr)
+            return 1
+        print(f"installed launchd agent {LAUNCHD_LABEL} → http://127.0.0.1:{args.port}")
+        print(f"unit: {unit}\nlogs: {log}\nIt starts at login and restarts if it dies. Remove with: vw uninstall-service")
+    else:
+        unit.write_text(render_systemd(_python(), cli, home, args.port, args.llama_port))
+        for cmd in (["systemctl", "--user", "daemon-reload"],
+                    ["systemctl", "--user", "enable", "--now", SYSTEMD_UNIT]):
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                print(f"wrote {unit} but `{' '.join(cmd)}` failed: {r.stderr.strip()}", file=sys.stderr)
+                return 1
+        print(f"installed systemd user unit {SYSTEMD_UNIT} → http://127.0.0.1:{args.port}")
+        print(f"unit: {unit}\nTo survive logout too: loginctl enable-linger {os.environ.get('USER', '')}")
+    return 0
+
+
+def cmd_uninstall_service(args) -> int:
+    kind, unit = service_paths()
+    if kind == "launchd":
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(unit)], capture_output=True)
+    else:
+        subprocess.run(["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT], capture_output=True)
+    if unit.exists():
+        unit.unlink()
+        print(f"removed {unit}")
+    else:
+        print("no service installed")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="vw", description="Virtual Worker service control")
     ap.add_argument("--home", help=f"data dir (default {DEFAULT_HOME})")
@@ -239,6 +433,17 @@ def main(argv: list[str] | None = None) -> int:
     p = subs["logs"] = sub.add_parser("logs")
     p.add_argument("-n", "--lines", type=int, default=200)
     p.add_argument("-f", "--follow", action="store_true")
+    p = subs["run"] = sub.add_parser("run", help="headless one-shot agent run via the running service")
+    p.add_argument("agent", help="agent id or name")
+    p.add_argument("prompt", nargs="*", help="the prompt (or pipe it on stdin)")
+    p.add_argument("--port", type=int, default=DEFAULT_PORT)
+    p.add_argument("--session", help="chat session id to continue (default: a fresh cli session)")
+    p.add_argument("--json", action="store_true", help="print raw loop events as JSON lines")
+    p.add_argument("--timeout", type=float, default=900)
+    p = subs["install-service"] = sub.add_parser("install-service", help="start at login/boot and keep alive")
+    p.add_argument("--port", type=int, default=DEFAULT_PORT)
+    p.add_argument("--llama-port", type=int, default=DEFAULT_LLAMA_PORT)
+    subs["uninstall-service"] = sub.add_parser("uninstall-service")
     for p in subs.values():  # --home is accepted before or after the subcommand
         p.add_argument("--home", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
@@ -257,6 +462,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_logs(args)
     if args.cmd == "supervise":
         return cmd_supervise(args)
+    if args.cmd == "run":
+        return cmd_run(args)
+    if args.cmd == "install-service":
+        return cmd_install_service(args)
+    if args.cmd == "uninstall-service":
+        return cmd_uninstall_service(args)
     return 2
 
 
