@@ -643,12 +643,10 @@ function AgentsPanel({
   const sectionCounts: Partial<Record<SettingsSection, number>> = {
     tools: draft.tools.length + (filesOn ? FS_TOOLS.length : 0),
     knowledge: draft.skills.length + draft.knowledgeBases.length + draft.wikis.length,
-    integrations: draft.mcpServers.length + draft.customTools.length + draft.connectors.length,
+    integrations: draft.mcpServers.length + draft.customTools.length,
   };
   // On/off sections (no meaningful count) get an "on" chip instead.
-  const sectionOn: Partial<Record<SettingsSection, boolean>> = {
-    metrics: !!draft.metrics.enabled,
-  };
+  const sectionOn: Partial<Record<SettingsSection, boolean>> = {};
 
   return (
     <div className="flex h-full min-h-0 bg-base">
