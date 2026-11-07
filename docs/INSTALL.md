@@ -1,122 +1,77 @@
 # Installing Virtual Worker
 
-Virtual Worker is a local AI studio that runs **entirely on your Mac** — your chats, agents,
-and models stay on your machine. This guide is written for anyone; no technical
-setup required.
+Virtual Worker runs entirely on your own machine. Chats, agents, models and
+traces stay there unless you connect something yourself.
 
-> **Requirements:** a Mac with **Apple Silicon** (M1/M2/M3/M4), macOS 12 or newer.
-> The app is a few hundred MB; AI models are a separate one-time download.
+## Requirements
 
----
+- macOS (Apple Silicon recommended) or Linux. Windows works through WSL.
+- About 1 GB for the app and its tools. Models are a separate one-time download
+  of a few GB each.
+- For the WhatsApp linked-device channel: Node.js 20 or newer.
 
-## Install (about 2 minutes)
+## From source
 
-1. **Download** the latest `Virtual Worker-<version>-arm64.dmg` from the team's
-   **Google Drive folder** (ask the Virtual Worker maintainer for the link), or from the
-   releases page:
-   https://github.com/virtual-worker
-2. **Open the `.dmg`** and drag **Virtual Worker** into your **Applications** folder.
-3. **First launch only — right-click to open:**
-   In Applications, **right-click** (or Control-click) **Virtual Worker → Open**, then click
-   **Open** in the dialog.
+```bash
+git clone <repository-url> virtual-worker
+cd virtual-worker
+./dev.sh
+```
 
-   > Why? Virtual Worker isn't distributed through the App Store, so the very first time macOS
-   > asks you to confirm. A normal double-click will say *"Virtual Worker can't be opened"* —
-   > **right-click → Open** is the way past it, and you only do it **once**. Every
-   > launch after that is a normal double-click.
+The first run bootstraps everything through `setup.sh`: a Python virtualenv
+with `uv`, the frontend packages, llama.cpp, the MLX engines on Apple Silicon,
+Playwright's Chromium for the browser tools, and the WhatsApp bridge packages.
+It prints the exact command for anything it cannot install itself (`uv`,
+Node.js, Homebrew).
 
-   Still blocked? Open the **Terminal** app, paste this line, press Return, then try
-   step 3 again:
-   ```
-   xattr -dr com.apple.quarantine /Applications/Virtual Worker.app
-   ```
+| Mode | Command | Where |
+|---|---|---|
+| Development (hot reload) | `./dev.sh` | web `http://localhost:5173`, API `:8889`, model `:8081` |
+| Always-on service | `./vw start` | one port, `http://127.0.0.1:8888`; `./vw status`, `./vw logs -f`, `./vw stop` |
 
----
+Use service mode for a worker that should keep answering on WhatsApp or
+Telegram after you close the terminal. Both modes can run at the same time; they
+use separate ports and data directories.
 
-## First run — add an AI model
+## First model
 
-Virtual Worker opens in its own window. The first time, it has no model loaded yet. Pick
-**one** of the two options below.
-
-### Option A — the team model, LocalFT (recommended)
-
-**LocalFT** is our own fine-tuned model (Supply Chain ID identity + tool use,
-runs fully on your Mac). It's in the same Google Drive folder as the installer.
-
-> **Requires Virtual Worker 0.2.5 or newer** — older versions don't scan the `models`
-> folder and won't list a hand-copied model. The version is shown next to the
-> Virtual Worker logo in the sidebar; if it's older, install the latest `.dmg` first.
-
-1. **Download** `LocalFT-9B-MLX-6bit-ft_c310a6ec.zip` from the Drive folder
-   (~6.6 GB — one time) and **double-click to unzip** it. You get a folder named
-   `LocalFT-9B-MLX-6bit-ft_c310a6ec` — don't rename it.
-2. **Move that folder into Virtual Worker's models directory.** In Finder press
-   **⌘⇧G** (Go to Folder), paste:
-   ```
-   ~/Library/Application Support/Virtual Worker/models
-   ```
-   and press Return. (If the `models` folder doesn't exist yet, create it there
-   first.) Drop the unzipped folder inside.
-3. **Open Virtual Worker** → **Models** → **On Device**. `LocalFT-9B-MLX-6bit-ft_c310a6ec`
-   is in the list — click **Activate**.
-4. Open **Chat** and say hi. It should introduce itself as **LocalFT**.
-
-> You need ~7 GB free disk and it runs comfortably on 16 GB+ Macs.
-> Developer running from source instead of the app? The models directory is
-> `<repo>/data/models` (when using `./dev.sh`) or `~/.virtual-worker/models`.
-
-### Option B — any public model
-
-1. Go to **Models** → **Discover**, search for a small model (the list shows which
-   ones **fit** your Mac).
-2. Click **Download** (a one-time, multi-GB download — it stays on your Mac).
-3. Switch to **On Device** and click **Activate**.
+1. Open **Models → Discover** and search. The list marks which files fit your
+   machine.
+2. **Download** one. Progress shows live and resumes if interrupted.
+3. Switch to **On Device**, pick a context size, and **Activate**.
 4. Open **Chat** and start talking.
 
-That's it — you're running a private AI studio locally.
+To use a model server you already run, start with
+`VW_UPSTREAM_URL=http://127.0.0.1:11434 ./dev.sh` (Ollama) or any
+OpenAI-compatible URL. To use an external provider for one agent, add a key under
+**Models → Providers** and pick it in that agent's settings.
 
----
+## Connect a chat app
 
-## Getting updates
+- **Telegram**: message `@BotFather`, send `/newbot`, copy the token, then
+  **Channels → Connect a channel → Telegram**.
+- **WhatsApp**: **Channels → Connect a channel → WhatsApp (linked device)**, click
+  **Pair**, and scan the QR code from the phone under Linked devices. Use a
+  dedicated number.
 
-When a newer version is available, Virtual Worker shows an **"Update available → Download"**
-message and opens the releases page. Download the new `.dmg` and drag it into
-Applications (replacing the old one). **Your chats and models are kept** — they live
-outside the app.
+## Updating
 
----
+```bash
+git pull
+./setup.sh        # syncs dependencies when they changed
+./vw restart      # or restart ./dev.sh
+```
 
-## Good to know
+Data lives outside the repository (`~/.virtual-worker` for the service, `./data`
+for dev), so updates never touch your agents, chats or models.
 
-- **Private by default.** Everything runs on your machine. Nothing is sent anywhere
-  unless *you* turn on web search or connect a remote model.
-- **Uninstall:** drag **Virtual Worker** from Applications to the Trash. Your data stays in
-  `~/Library/Application Support/Virtual Worker` until you delete that folder too.
-- **Problems?** Ping the Virtual Worker maintainer with a screenshot — most first-launch issues
-  are the right-click → Open step above.
+## Desktop app
 
----
+`desktop/` contains an Electron shell and a PyInstaller spec that freeze the
+backend and bundle the built UI into a single app. Build it with
+`desktop/build.sh`. Ready-made downloads are not published yet.
 
-### 📋 Short version to paste into chat
+## Uninstall
 
-> **Install Virtual Worker + the LocalFT team model (Mac, Apple Silicon):**
-> 0. Need **Virtual Worker 0.2.5 or newer** for step 4–5 (version shows in the sidebar).
-> 1. From the team Google Drive folder, download `Virtual Worker-*.dmg` **and**
->    `LocalFT-9B-MLX-6bit-ft_c310a6ec.zip`.
-> 2. Open the `.dmg`, drag **Virtual Worker** to **Applications**.
-> 3. First time only: **right-click Virtual Worker → Open → Open** (a plain double-click warns
->    the first time — right-click → Open gets past it, just once).
-> 4. Unzip the model. In Finder press ⌘⇧G, go to
->    `~/Library/Application Support/Virtual Worker/models` (create `models` if missing) and
->    drop the `LocalFT-9B-MLX-6bit-ft_c310a6ec` folder there.
-> 5. In Virtual Worker: **Models → On Device → LocalFT… → Activate** → **Chat**.
->    Everything runs locally. 🦦
-
-## Run from source
-
-Developers can choose between two local modes after running `./setup.sh`:
-
-- `./vw start` runs the stable service detached, with the built UI and API
-  on `http://127.0.0.1:8888` (use `./vw status`, `logs`, and `stop`).
-- `./dev.sh` runs the foreground hot-reload profile on the stable-safe defaults
-  `:5173` (web), `:8889` (API), and `:8081` (model); press Ctrl+C to stop it.
+Delete the repository and the data directory (`~/.virtual-worker`). Downloaded
+base models live in the Hugging Face cache at `~/.cache/huggingface`.

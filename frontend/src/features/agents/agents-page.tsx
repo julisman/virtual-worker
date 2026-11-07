@@ -426,7 +426,7 @@ const FS_TOOLS = ["read_file", "write_file", "edit_file", "list_dir", "glob", "g
 
 // The settings editor's sections — a side-nav item each, one on screen at a time
 // (the old single-page editor scrolled through eight cards).
-type SettingsSection = "identity" | "model" | "tools" | "knowledge" | "integrations" | "memory" | "metrics" | "guardrails";
+type SettingsSection = "identity" | "model" | "tools" | "knowledge" | "integrations" | "memory" | "guardrails";
 
 const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "identity", label: "Identity" },

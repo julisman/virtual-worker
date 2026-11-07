@@ -219,5 +219,6 @@ cd frontend && npm run build                       # tsc --noEmit && vite build
 
 ## Where to read more
 
+- `docs/ARCHITECTURE.md` — the full backend/frontend architecture, run path, data model.
 - `docs/PRD.md` — the product plan: concepts, requirements, milestones, open decisions.
 - In-app **Docs** (the Docs tab) — end-user documentation for every screen.

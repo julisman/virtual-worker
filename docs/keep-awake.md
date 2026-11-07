@@ -1,7 +1,7 @@
 # Keeping Virtual Worker awake (always-on agents)
 
 Virtual Worker runs always-on background work — the scheduler, the trigger engine, and live
-channels like chat channel. If the Mac sleeps, those WebSockets drop and scheduled
+chat channels (WhatsApp, Telegram). If the Mac sleeps, those WebSockets drop and scheduled
 runs stall. This is how to keep the machine (and its network) awake for each way
 of running Virtual Worker.
 
