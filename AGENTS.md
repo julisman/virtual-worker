@@ -38,6 +38,7 @@ virtual-worker/
 │       └── index.css   # the @theme design tokens (palette + fonts)
 ├── docs/               # PRD.md (product plan), ARCHITECTURE.md, INSTALL.md
 ├── desktop/            # Electron shell + PyInstaller spec for the packaged app
+├── browser-extension/  # Chrome companion: groups agent tabs when attached to the user's Chrome
 ├── registry-scaffold/  # starter repo layout for a git-backed template registry
 ├── samples/            # example skill packs
 ├── dev.sh              # bootstrap-on-first-run + start backend + frontend (hot reload)

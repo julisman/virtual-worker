@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Virtual Worker Companion",
+  "version": "0.1.0",
+  "description": "Groups the tabs your Virtual Worker agents open into a 'Virtual Worker' tab group, like Claude in Chrome. Talks to no server.",
+  "permissions": ["tabs", "tabGroups"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "Virtual Worker Companion: agent tabs are grouped automatically" },
+  "icons": { "128": "icon128.png" }
+}

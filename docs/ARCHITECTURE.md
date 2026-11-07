@@ -186,6 +186,12 @@ the vendor's terms for the account.
 | Chat channel | `<channel>:<account>:<conversation>` | `channels/manager.py` |
 | Inbox flow-back | the originating session | `agent/inbox.py` |
 
+In attach mode (`VW_BROWSER_CDP_URL`, or Settings → Browser → Attach) the same
+tools drive the user's own Chrome over CDP. Tabs the backend opens carry
+`window.name = "vw-agent"`; the companion extension in `browser-extension/`
+sees that marker and moves them into a "Virtual Worker" tab group, since
+`chrome.tabGroups` is only reachable from an extension.
+
 ### Delegation and flow-back
 
 `assign_to` files a task on a teammate's board and records the origin
