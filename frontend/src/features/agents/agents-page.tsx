@@ -4075,7 +4075,7 @@ function ChatGptLogin({ provider, reloadProviders }: {
   };
 
   return (
-    <Field label="ChatGPT account" hint="Sign in with your ChatGPT Plus/Pro subscription — no API key. Uses the Codex backend; only a refresh token is stored locally.">
+    <Field label="ChatGPT account" hint="Sign in with your ChatGPT Plus/Pro subscription — no API key. Uses the Codex backend through the open-source Codex CLI's public sign-in; only a refresh token is stored locally. Whether your plan allows this use is set by OpenAI's terms, so check them before you sign in.">
       {connected ? (
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-success">✓ Signed in{account ? ` (${account})` : ""}</span>

@@ -710,8 +710,27 @@ async def resolve_target(agent: dict | None,
     if provider == "opencode-go":
         kind = _opencode_go_kind(model)
 
+    # ChatGPT subscription is an OAuth login routed through the Codex Responses
+    # API: resolve a fresh access token + account id from the OAuth manager.
     if auth_mode == "subscription" and provider == "openai":
-        raise ValueError("ChatGPT subscription sign-in is not available in this build — use an API key")
+        from gateway import openai_oauth
+        api_key, account = await openai_oauth.active_credential()
+        if not api_key:
+            raise ValueError("ChatGPT subscription is not signed in: open the agent's Model card "
+                             "and click Sign in with ChatGPT")
+        return model, {
+            "provider": provider,
+            "kind": "codex",
+            "base_url": openai_oauth.CODEX_URL,
+            "api_key": api_key,
+            "account_id": account,
+            "auth_mode": "subscription",
+            "reasoning_effort": supports_reasoning_effort(provider),
+            "prompt_cache_key": True,
+            "prompt_cache_retention": "24h",
+            "cache_control": False,
+            "stateless_reasoning_replay": True,
+        }
 
     cred = (rec.get("token") if auth_mode == "subscription" else rec.get("apiKey"))
     if auth_mode == "none":

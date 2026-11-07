@@ -124,4 +124,34 @@ async def set_provider(provider_id: str, body: ProviderCredIn):
     return next(p for p in providers.catalog() if p["id"] == provider_id)
 
 
-# Subscription sign-ins (OAuth) are not part of this build — providers are BYOK only.
+# --- ChatGPT subscription: OAuth (PKCE) sign-in ----------------------------- #
+
+@router.post("/openai/oauth/start")
+async def openai_oauth_start():
+    """Begin the ChatGPT sign-in. Returns the authorize URL for the browser to
+    open; a one-shot loopback listener on localhost:1455 catches the redirect."""
+    from gateway import openai_oauth
+    try:
+        url = openai_oauth.start_login()
+    except openai_oauth.OAuthError as exc:
+        raise HTTPException(409, str(exc))
+    return {"authUrl": url}
+
+
+@router.get("/openai/oauth/status")
+async def openai_oauth_status():
+    from gateway import openai_oauth
+    return openai_oauth.login_status()
+
+
+@router.post("/openai/oauth/disconnect")
+async def openai_oauth_disconnect():
+    from gateway import openai_oauth
+    openai_oauth.disconnect()
+    return {"status": "idle"}
+
+
+# Claude (Anthropic) subscription is a pasted long-lived token from `claude setup-token`
+# saved through the generic PUT above as the provider `token` and sent as a Bearer with
+# the Claude Code beta headers (gateway/egress.py). There is no PKCE sign-in route.
+# Operators should check Anthropic's terms before using a subscription token here.

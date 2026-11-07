@@ -125,9 +125,9 @@ tees the exact bytes the client receives without buffering streams.
   the machine, download with resume and parallel connections, list on-device
   models, activate.
 
-### 2.4 External providers (bring your own key)
+### 2.4 External providers (bring your own key, or a subscription)
 
-Each agent stores a `modelSource` (`local` or `byok`), a `provider` and a
+Each agent stores a `modelSource` (`local`, `byok` or `subscription`), a `provider` and a
 `model`. `gateway/providers.py:resolve_target()` turns that into a target the
 loop passes through; `gateway/egress.py` speaks each provider's wire protocol
 (OpenAI-compatible chat, Anthropic Messages, OpenAI Responses) and normalizes
@@ -135,8 +135,16 @@ every stream back to the same chunk shape the local upstream produces, so
 `loop.py` never knows which it is talking to. Prompt caching, reasoning effort,
 per-model thinking formats and discovered context windows are handled there;
 `pricing.py` turns usage into cost. Credentials are stored once in
-`settings.json` and never returned by the API. Subscription sign-ins are not
-part of this build.
+`settings.json` and never returned by the API.
+
+Two subscription paths exist, both opt-in per agent. **ChatGPT**:
+`gateway/openai_oauth.py` runs the same PKCE sign-in as the open-source Codex
+CLI (public client id, loopback on `localhost:1455`), keeps only the refresh
+token, re-derives the access credential on demand, and `egress.py` sends the
+request to the Codex Responses API with the account-id header. **Claude**: a
+long-lived token from `claude setup-token` pasted as the provider token and sent
+with the Claude Code beta headers; there is no sign-in flow. Both are governed by
+the vendor's terms for the account.
 
 ### 2.5 Web search and browsers
 

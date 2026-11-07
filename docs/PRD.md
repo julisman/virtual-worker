@@ -186,6 +186,9 @@ The product is built around five ideas:
   (RAM/VRAM estimate), download with resume and cancel, list on-device models, activate.
 - FR-M4. Per-worker model source: `local`, or a named provider with a BYOK key. Provider
   credentials are stored once, write-only, and never returned to the UI or the model.
+  _Also implemented (2026-11-07): a `subscription` source. ChatGPT signs in with the
+  open-source Codex CLI's public OAuth flow and runs on the Codex backend; Claude accepts a
+  pasted `claude setup-token`. Both are opt-in per worker and subject to vendor terms._
 - FR-M5. Provider adapters normalize every provider to one streaming chunk shape so the
   loop is provider-agnostic. Retry with backoff and rate-limit handling.
 - FR-M6. Optional outbound gateway: expose the active model on OpenAI-, Anthropic- and
