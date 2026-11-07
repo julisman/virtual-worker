@@ -56,6 +56,9 @@ MCP server, a remote upstream, or a connected chat channel.
   persistent profile so logins stick. It can also attach to your own running Chrome,
   where the small [companion extension](browser-extension/README.md) groups the
   agent's tabs the way Claude in Chrome does.
+- **Social lead-gen skills**: a worker that finds people publicly asking for what you
+  sell on Threads, TikTok and Instagram, replies helpfully under a strict budget, answers
+  DMs and comments, and routes everyone into WhatsApp, with the guardrails in code.
 - **Evaluate**: benchmark on-device models on a suite of cases (exact, keywords, tool
   calls, LLM judge), with a leaderboard of quality, speed and memory, per-case
   drill-down, suites built from your own chat feedback, and one-click promote.

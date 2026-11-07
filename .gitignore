@@ -2,13 +2,14 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-.venv/
+# No trailing slash: worktrees symlink these, and a symlink is not a directory.
+.venv
 *.db
 *.db-wal
 *.db-shm
 
 # Node / frontend
-node_modules/
+node_modules
 frontend/dist/
 
 # Local app data (app.db, sessions, tokens, llama logs) — created at runtime
