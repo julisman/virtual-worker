@@ -33,6 +33,21 @@ agent harness. Read `docs/PRD.md` for the product plan and milestones.
 5. Use conventional commit messages: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`.
 6. Open a PR against `main` and describe what changed and how you verified it.
 
+## Releasing
+
+Releases are cut from `main` by a maintainer:
+
+1. Move the entries under `[Unreleased]` in `CHANGELOG.md` into a new version
+   section with today's date, and update the compare links at the bottom.
+2. Bump the version in `frontend/package.json`, `backend/app.py` (the FastAPI
+   `version`) and `backend/storage/backup.py` (`APP_VERSION`) so the UI, the
+   API docs and backup manifests agree.
+3. Run both gates (`backend` pytest, `frontend` build) and the template lint.
+4. Commit as `chore(release): vX.Y.Z`, tag it (`git tag -a vX.Y.Z`), push the
+   branch and the tag, and wait for CI to pass.
+5. Create the GitHub release from the tag and paste the changelog section as
+   its notes. Template registries pin the lint tool to this tag.
+
 ## Reporting issues
 
 Open a GitHub issue with steps to reproduce, the platform and model you used, and the
