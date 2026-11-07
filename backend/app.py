@@ -205,7 +205,7 @@ async def lifespan(app: FastAPI):
     # survives a uvicorn --reload and is re-adopted — same as llama-server.
 
 
-app = FastAPI(title="Virtual Worker", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Virtual Worker", version="0.1.1", lifespan=lifespan)
 
 # Team-mode auth gate. Added FIRST so it ends up INNERMOST — CORS then wraps its
 # 401s with the right headers. In solo mode (default) it's a transparent no-op.

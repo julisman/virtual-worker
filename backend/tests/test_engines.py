@@ -129,8 +129,10 @@ def test_llama_bin_prefers_managed_copy(tmp_path, monkeypatch):
 
 
 def test_can_update_packaged(monkeypatch):
+    import platform
     monkeypatch.setattr(config, "PACKAGED", True)
     monkeypatch.setattr(config, "uv_bin", lambda: "/bundled/uv")
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")   # packaged self-update is a macOS feature
     assert engines._can_update(engines._by_key("llama.cpp")) is True  # no brew needed
     assert engines._can_update(engines._by_key("mlx-lm")) is True
 

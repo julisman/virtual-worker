@@ -6,6 +6,16 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-07
+
+### Fixed
+
+- The ten `skills/data` packs (CSV cleaner, JSON wrangler, log analyzer, invoice
+  processor and friends) were missing from the 0.1.0 archive: an unanchored
+  `data/` rule in `.gitignore` hid them. The rule now matches only the
+  repository's own data directory.
+- The packaged-engine update test assumed macOS; it now passes on Linux CI.
+
 ## [0.1.0] - 2026-11-07
 
 First public release. Virtual Worker is a local-first platform for running
@@ -119,5 +129,6 @@ default and reachable from the chat apps you already use.
 - The WhatsApp linked-device transport relies on an unofficial client library.
   Use a dedicated number and read the disclosure in the app.
 
-[Unreleased]: https://github.com/julisman/virtual-worker/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/julisman/virtual-worker/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/julisman/virtual-worker/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/julisman/virtual-worker/releases/tag/v0.1.0

@@ -48,7 +48,7 @@ import config
 logger = logging.getLogger(__name__)
 
 VESBAK_VERSION = "1"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 MANIFEST_NAME = "manifest.json"
 REDACTED = "__REDACTED__"
 

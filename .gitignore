@@ -12,7 +12,7 @@ node_modules/
 frontend/dist/
 
 # Local app data (app.db, sessions, tokens, llama logs) — created at runtime
-data/
+/data/
 
 # OS
 .DS_Store
