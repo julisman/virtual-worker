@@ -1,7 +1,7 @@
 // Backup & Restore (PRD-11 M1) — export/import a portable .vwbak studio snapshot.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiFetch, apiJson } from "@/lib/api";
+import { apiFetch, apiJson, apiPost, apiPut } from "@/lib/api";
 
 interface Rollback {
   name: string;
@@ -9,9 +9,22 @@ interface Rollback {
   modifiedAt: string;
 }
 
+interface Schedule {
+  enabled: boolean;
+  intervalHours: number;
+  keep: number;
+  includeModels: boolean;
+  redactSecrets: boolean;
+  lastScheduledAt: string | null;
+  lastScheduledError: string | null;
+  nextDueAt: string | null;
+}
+
 interface BackupInfo {
   lastExportAt: string | null;
   rollbacks: Rollback[];
+  scheduled: Rollback[];
+  schedule: Schedule;
   homePath: string;
 }
 
@@ -95,6 +108,43 @@ export function BackupCard() {
   }, [load]);
 
   const secretsNeeded = result?.manifest?.secretsNeeded ?? [];
+
+  // Scheduled local snapshots (FR-X3): opt-in, written by the hourly maintenance
+  // loop under <home>/backups, newest N kept.
+  const [sched, setSched] = useState<Schedule | null>(null);
+  const [savingSched, setSavingSched] = useState(false);
+  const [runningNow, setRunningNow] = useState(false);
+  useEffect(() => { if (info) setSched(info.schedule); }, [info]);
+
+  const saveSchedule = useCallback(async (patch: Partial<Schedule>) => {
+    if (!sched) return;
+    const next = { ...sched, ...patch };
+    setSched(next); setSavingSched(true); setError(null);
+    try {
+      const saved = await apiPut<Schedule>("/api/backup/schedule", {
+        enabled: next.enabled, intervalHours: next.intervalHours, keep: next.keep,
+        includeModels: next.includeModels, redactSecrets: next.redactSecrets,
+      });
+      setSched(saved);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setSavingSched(false); }
+  }, [sched]);
+
+  const runNow = useCallback(async () => {
+    setRunningNow(true); setError(null);
+    try { await apiPost("/api/backup/schedule/run", {}); await load(); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setRunningNow(false); }
+  }, [load]);
+
+  const deleteSnapshot = useCallback(async (name: string) => {
+    if (!window.confirm(`Delete snapshot ${name}? This cannot be undone.`)) return;
+    try {
+      const res = await apiFetch(`/api/backup/snapshots/${encodeURIComponent(name)}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`delete failed (${res.status})`);
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, [load]);
 
   return (
     <div className="mt-8">
@@ -181,6 +231,92 @@ export function BackupCard() {
         )}
       </div>
 
+      {/* Scheduled local snapshots */}
+      <div className="mt-3 rounded-2xl border border-line bg-canvas p-4">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0">
+            <div className="font-display text-sm font-semibold text-ink">Scheduled snapshots</div>
+            <p className="mt-0.5 text-xs text-mute">
+              Write a <span className="font-mono">.vwbak</span> under <span className="font-mono">backups/</span> in
+              your data directory on a fixed interval and keep the newest few. Local only; copy the
+              folder to a drive or sync it yourself.
+            </p>
+          </div>
+          {sched && (
+            <label className="ml-auto flex shrink-0 items-center gap-2 text-sm text-ink">
+              <input type="checkbox" checked={sched.enabled} disabled={savingSched}
+                onChange={(e) => saveSchedule({ enabled: e.target.checked })}
+                className="size-4 rounded border-pressed accent-primary" />
+              {sched.enabled ? "On" : "Off"}
+            </label>
+          )}
+        </div>
+        {sched && (
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex items-center justify-between gap-2 text-xs text-body">
+              Every
+              <span className="flex items-center gap-1">
+                <input type="number" min={1} max={720} value={sched.intervalHours} disabled={savingSched}
+                  onChange={(e) => setSched({ ...sched, intervalHours: Number(e.target.value) || 1 })}
+                  onBlur={() => saveSchedule({})}
+                  className="w-20 rounded-lg border border-line bg-canvas px-2 py-1 text-right text-sm text-ink" />
+                hours
+              </span>
+            </label>
+            <label className="flex items-center justify-between gap-2 text-xs text-body">
+              Keep newest
+              <span className="flex items-center gap-1">
+                <input type="number" min={1} max={365} value={sched.keep} disabled={savingSched}
+                  onChange={(e) => setSched({ ...sched, keep: Number(e.target.value) || 1 })}
+                  onBlur={() => saveSchedule({})}
+                  className="w-20 rounded-lg border border-line bg-canvas px-2 py-1 text-right text-sm text-ink" />
+                snapshots
+              </span>
+            </label>
+            <label className="flex items-center gap-2 text-xs text-body">
+              <input type="checkbox" checked={sched.redactSecrets} disabled={savingSched}
+                onChange={(e) => saveSchedule({ redactSecrets: e.target.checked })}
+                className="size-4 rounded border-pressed accent-primary" />
+              Redact secrets (a restore then needs keys re-entered)
+            </label>
+            <label className="flex items-center gap-2 text-xs text-body">
+              <input type="checkbox" checked={sched.includeModels} disabled={savingSched}
+                onChange={(e) => saveSchedule({ includeModels: e.target.checked })}
+                className="size-4 rounded border-pressed accent-primary" />
+              Include <span className="font-mono">models/</span>
+            </label>
+          </div>
+        )}
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button onClick={runNow} disabled={runningNow}
+            className="flex items-center gap-2 rounded-xl border border-pressed bg-canvas px-3 py-1.5 text-xs font-medium text-ink transition-colors hover:bg-soft disabled:opacity-40">
+            {runningNow ? <><Spinner /> Writing…</> : "Snapshot now"}
+          </button>
+          <span className="text-[11px] text-mute">
+            Last: <span className="font-medium text-body">{fmtDate(sched?.lastScheduledAt ?? null)}</span>
+            {sched?.enabled && sched.nextDueAt && <> · next due {fmtDate(sched.nextDueAt)}</>}
+          </span>
+        </div>
+        {sched?.lastScheduledError && (
+          <p className="mt-2 rounded-xl border border-danger-soft bg-danger-soft px-3 py-2 font-mono text-[11px] text-danger">
+            Last scheduled snapshot failed: {sched.lastScheduledError}
+          </p>
+        )}
+        {info && info.scheduled.length > 0 && (
+          <ul className="mt-3 space-y-1 border-t border-line pt-3">
+            {info.scheduled.map((r) => (
+              <li key={r.name} className="flex items-center gap-2 text-[11px]">
+                <a href={`/api/backup/snapshots/${encodeURIComponent(r.name)}`} download
+                  className="font-mono text-primary hover:underline">{r.name}</a>
+                <span className="text-mute">{fmtBytes(r.size)}</span>
+                <span className="ml-auto text-mute">{fmtDate(r.modifiedAt)}</span>
+                <button onClick={() => deleteSnapshot(r.name)} className="text-mute hover:text-danger" title="Delete">✕</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       {/* Rollback backups */}
       {info && info.rollbacks.length > 0 && (
         <div className="mt-3 rounded-2xl border border-line bg-canvas p-4">
@@ -189,9 +325,11 @@ export function BackupCard() {
           <ul className="mt-2 space-y-1">
             {info.rollbacks.map((r) => (
               <li key={r.name} className="flex items-center gap-2 text-[11px]">
-                <span className="font-mono text-body">{r.name}</span>
+                <a href={`/api/backup/snapshots/${encodeURIComponent(r.name)}`} download
+                  className="font-mono text-primary hover:underline">{r.name}</a>
                 <span className="text-mute">{fmtBytes(r.size)}</span>
                 <span className="ml-auto text-mute">{fmtDate(r.modifiedAt)}</span>
+                <button onClick={() => deleteSnapshot(r.name)} className="text-mute hover:text-danger" title="Delete">✕</button>
               </li>
             ))}
           </ul>
@@ -199,8 +337,8 @@ export function BackupCard() {
       )}
 
       <p className="mt-4 text-xs text-mute">
-        Deferred (later milestones): selective export of just chosen agents/skills, scheduled backups
-        with retention, and <span className="font-mono">VW_HOME</span> migration.
+        To move to another machine: export (or copy the newest snapshot), install Virtual Worker
+        there, and import. Models are re-downloaded from the hub.
       </p>
     </div>
   );

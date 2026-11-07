@@ -243,6 +243,9 @@ The product is built around five ideas:
   history.
 - FR-S2. Triggers: file-watch on a folder, inbound webhook with a shared secret, and
   channel events. Each fires a run with the event payload.
+  _File-watch and webhook triggers implemented. Channel messages run the bound worker
+  directly through the channel manager rather than through the trigger engine; a
+  separate "channel event" trigger kind is not planned unless a use case needs it._
 - FR-S3. All background loops are cancellable tasks started with the app and are
   best-effort: they log errors and never crash.
 
@@ -346,15 +349,19 @@ The product is built around five ideas:
   exemptions from the cookie gate, `SECURITY.md`. Team-mode hardening pass still open._
 - FR-X3. Backup and restore: one archive of the data directory (workers, memory, skills,
   templates, settings, channel sessions), scheduled local backups, machine migration.
+  _Implemented: export/import with a pre-import rollback; scheduled local snapshots with
+  interval and retention (2026-11-07, maintenance loop); migration is export then import._
 - FR-X4. Packaging: a dev launcher, a service mode (detached, auto-restart, built UI), and
   a desktop app build (frozen backend plus UI) as a later milestone.
-  _Desktop build scaffold present under `desktop/` (2026-11-07); release pipeline not yet wired._
+  _Desktop build scaffold present under `desktop/` (2026-11-07); no release pipeline or signed builds yet._
 
 ## 9. UX and surfaces
 
 **Web UI** (sidebar app, light and dark):
 
 - **Home**: active model, worker statuses, recent activity, channel connection health.
+  _Not built: Chat is the landing tab after setup; Monitor covers health. Revisit if the
+  tab count grows._
 - **Workers**: list and detail with tabs Overview, Chat, Board, Activity, Schedules,
   Triggers, Conversations, Settings (model, tools, skills, MCP, guardrails).
 - **Models**: discover, download, on-device, activate; provider keys.
@@ -363,7 +370,7 @@ The product is built around five ideas:
 - **Skills**: library of installed packs, upload, inspect.
 - **Templates**: gallery, deploy form, export, registries.
 - **Knowledge**: knowledge bases and wikis.
-- **Deliveries**: audit log of everything sent out.
+- **Deliveries**: audit log of everything sent out. _Shipped 2026-11-07._
 - **Traces**: the call-by-call debug viewer.
 - **Settings**: data directory, upstream, search provider, retention, backup, team mode.
 
@@ -512,3 +519,29 @@ external channel; capture and background loops are best-effort and never crash t
   hardening pass in M6.
 - **D7 Web search default.** Self-hosted SearXNG managed like the model server, versus a
   free-tier API. SearXNG proposed for the no-key default.
+
+## 17. Implementation status (2026-11-07)
+
+Checked requirement by requirement against the code on `main`.
+
+| Area | Status | Notes |
+|---|---|---|
+| 8.1 Model runtime and hub | Done | Managed llama.cpp and MLX, any OpenAI-compatible upstream, hub with fit estimates and resumable downloads, BYOK providers, multi-protocol gateway with minted tokens |
+| 8.2 Workers | Done | CRUD, memory from feedback, working-folder confinement, guardrails, caps, kill switch, persistent sessions |
+| 8.3 Agent harness | Done | Per-run registry, bounded loop, context compression, verify pass, built-in tools, MCP allow-lists, skills |
+| 8.4 Board and worker | Done | Definition of done, activity feed, opt-in duty worker, delegation with flow-back |
+| 8.5 Schedules and triggers | Done | Cron and one-time schedules, file-watch and webhook triggers. Channel messages bypass the trigger engine by design (see FR-S2 note) |
+| 8.6 Chat channels | Done | Full adapter contract, dedup, policies, pairing, bindings, per-conversation queues, media, `channel_send`, write-only credentials |
+| 8.7 WhatsApp | Done | Linked device (QR and pairing code) and Cloud API; plus Telegram, Discord and Slack on the same interface |
+| 8.8 Delivery | Done | in-app, desktop, webhook, chat, email, Obsidian; audit log and Deliveries page |
+| 8.9 Knowledge | Done | Knowledge bases with cited retrieval, wikis as plain folders |
+| 8.10 Templates | Done | Bundle format, gallery, export/import with dependency checks, git registries with diffed updates |
+| 8.11 Observability | Done | Capture middleware, trace viewer, analytics with budgets, retention loop |
+| 8.12 Trust, backup, packaging | Mostly done | Team mode hardened (still behind its flag, D6); security baseline; backup export/import and scheduled snapshots; dev launcher and service mode. Desktop build is a scaffold with no release pipeline |
+| 9 UX | Mostly done | Every listed surface exists except a Home screen (Chat is the landing tab) |
+| First-run experience | Done | Wizard: model, worker from a template, optional chat app |
+| Later (deferred) | Not started | Fine-tuning from feedback, evaluation suites, voice, case management, hosted template index. Browser control, listed as later, is present |
+
+Open items that need a person rather than code: the copyright holder line in
+`LICENSE`, the first push and CI run, real-account tests of each chat channel, and
+the `v0.1.0` tag.

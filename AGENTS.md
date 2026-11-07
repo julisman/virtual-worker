@@ -124,7 +124,8 @@ inbound (browser / coding agents / later: chat channels)
   **scheduler** (`agent/scheduler.py`), the **trigger engine** (`agent/triggers.py`),
   the board **worker** (`agent/worker.py`, opt-in autonomous task execution with a
   verify pass), the **channel manager**, and the **maintenance** loop
-  (`runtime/maintenance.py`: retention pruning + WAL checkpoint, hourly). Loops are
+  (`runtime/maintenance.py`: retention pruning + WAL checkpoint + the opt-in scheduled
+  backup snapshot, hourly). Loops are
   best-effort: log errors, never crash.
 - **Security baseline** (`app.py`): CORS local-origins-only (+ `VW_CORS_ORIGINS`),
   `TrustedHostMiddleware` (+ `VW_ALLOWED_HOSTS`), httpx logging quieted and a

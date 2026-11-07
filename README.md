@@ -40,7 +40,7 @@ MCP server, a remote upstream, or a connected chat channel.
   when the agent is on duty.
 - **Schedules** (cron and one-time) and **triggers** (file watch, inbound webhook).
 - **Outbound delivery** to in-app chat, desktop notifications, webhooks, email (SMTP, to an
-  allow-list) and connected chat channels, with an audit log.
+  allow-list) and connected chat channels, with an audit log and a Deliveries page.
 - **Skills** as portable `SKILL.md` packs with progressive disclosure.
 - **Knowledge bases** with local embeddings and cited retrieval.
 - **Templates**: deploy a ready-made agent from a gallery, export or import bundles.
@@ -70,7 +70,8 @@ MCP server, a remote upstream, or a connected chat channel.
   calls. Analytics and monitoring on top.
 - **Optional team mode** with accounts, roles enforced on every mutating route, a login
   rate limit and an audit log, for a shared host. Off by default.
-- **Backup and restore** of the whole data directory.
+- **Backup and restore** of the whole data directory, plus opt-in scheduled local
+  snapshots with retention.
 
 ## Run
 

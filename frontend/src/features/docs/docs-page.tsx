@@ -83,6 +83,7 @@ const CATEGORIES: Category[] = [
   {
     title: "Channels",
     sections: [
+      { id: "deliveries", title: "Deliveries", icon: ChannelsIcon, keywords: "deliveries audit log sent failed dropped outbound email webhook desktop notification obsidian schedule result deliver tool retention" },
       { id: "channels", title: "Chat Channels", icon: ChannelsIcon, keywords: "whatsapp telegram botfather bot token discord gateway slack socket mode channel pair qr code linked device cloud api webhook dm policy pairing allowlist group mention binding route conversation channel_send" },
     ],
   },
@@ -580,6 +581,17 @@ export VW_DEFAULT_MODEL="local-qwen"`}</Pre>
       ]} />
     </>
   ),
+  deliveries: (
+    <>
+      <P><Term>Deliveries</Term> is the audit log of everything Virtual Worker sent out of the app: schedule results, replies on chat channels, emails, webhooks, desktop notifications and Obsidian notes. Every attempt is one row with its outcome, so you can always answer "did that go out, and where?".</P>
+      <Bullets items={[
+        <><Term>sent</Term> — the target accepted it. <Term>failed</Term> — the send errored (open the row for the error). <Term>dropped</Term> — refused before sending, for example a webhook URL or email address that is not on the allow-list.</>,
+        <>Filter by agent, kind, source (<Code>schedule</Code>, the <Code>deliver</Code> tool, a channel <Code>reply</Code>, a <Code>test</Code> send) or status, and search the target or text. Click a row to read exactly what was sent.</>,
+        <>Chat-channel replies also appear under the agent's Activity; schedule results show their latest delivery status next to the schedule.</>,
+      ]} />
+      <P>Rows are kept for <Code>VW_DELIVERY_RETENTION_DAYS</Code> (90 by default) and pruned by the hourly maintenance loop. Nothing on this page sends anything; it only reads the log.</P>
+    </>
+  ),
   settings: (
     <>
       <P><Term>Settings</Term> keeps your inference engines current. It lists each engine — <Term>llama.cpp</Term>, <Term>MLX-LM</Term>, <Term>MLX-VLM</Term>, and the core <Term>MLX</Term> framework — with the installed and latest versions.</P>
@@ -588,6 +600,7 @@ export VW_DEFAULT_MODEL="local-qwen"`}</Pre>
         <>If an engine has an update, an <Term>Update</Term> button appears — click it to install or upgrade.</>,
       ]} />
       <P>An update takes effect the next time you activate a model; a model that's already running keeps its version until you re-activate it. Your active-model choice persists in <Code>~/.virtual-worker/settings.json</Code> across restarts. Most other behavior is configured through environment variables (see the relevant sections above).</P>
+      <P><Term>Backup &amp; Restore</Term> exports your whole studio — agents, memory, sessions, skills, settings — as one <Code>.vwbak</Code> file and restores it on any machine (a rollback snapshot is written before every import). Turn on <Term>Scheduled snapshots</Term> to have the maintenance loop write a snapshot under <Code>backups/</Code> in your data directory every N hours and keep only the newest few; download or delete them from the same card. Snapshots stay local — copy the folder to a drive or sync it yourself.</P>
     </>
   ),
   troubleshooting: (

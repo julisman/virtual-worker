@@ -4,7 +4,8 @@ Bounds the database and on-disk media so a long-running worker never grows
 without limit: the Debug trace store (full prompts + tool results on every model
 call), the append-only activity feed, the delivery audit log, chat-channel
 dedup ids, expired originals of compressed tool results, received chat
-attachments, and finished download jobs. Started/stopped from app.py's lifespan
+attachments, and finished download jobs. It also writes the opt-in scheduled
+local backup snapshot when one is due. Started/stopped from app.py's lifespan
 alongside the scheduler/trigger loops. Best-effort: a prune failure is logged
 and never crashes the loop. ``prune_once()`` is synchronous and testable.
 """
@@ -74,6 +75,11 @@ def prune_once() -> dict:
         from routes.hub import evict_finished_jobs
         return evict_finished_jobs()
     step("jobs", jobs)
+
+    def scheduled_backup():
+        from storage import backup
+        return backup.scheduled_backup_once().get("ran", False)
+    step("backup", scheduled_backup)
 
     def checkpoint():
         conn = sqlite3.connect(str(config.db_path()))

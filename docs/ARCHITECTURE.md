@@ -84,6 +84,7 @@ React 18, Vite 6, TypeScript, Tailwind CSS v4. No router or data library: one
 | Templates | Gallery, deploy with variables, export, import, git registries, update with diff. |
 | Knowledge, Wiki | Knowledge bases (RAG) and agent-maintained wikis. |
 | Models (`hub`), Connect | Discover and download models, activate; copy-paste setup for coding agents. |
+| Deliveries | Audit log of every outbound send with filters and the sent text. |
 | Debug, Monitor, Analytics | Trace viewer, live resources and health, cost and usage. |
 | Docs, Settings | In-app documentation; engines, browser, email delivery, backup, team mode, vision helper. |
 
@@ -293,7 +294,7 @@ write-only secret (provider keys, channel credentials, delivery passwords).
 | `/api/providers`, `/api/tokens`, `/api/gateway` | Provider keys, gateway tokens, connect info. |
 | `/api/hub`, `/api/runtime`, `/api/engines`, `/api/monitor` | Models, the managed server, engines, live health. |
 | `/api/skills`, `/api/kb`, `/api/wiki`, `/api/templates`, `/api/registries`, `/api/mcp`, `/api/tools` | Skills, knowledge, templates and registries, MCP servers, custom tools. |
-| `/api/team`, `/api/auth`, `/api/users`, `/api/backup`, `/api/browser`, `/api/analytics`, `/api/debug` | Team view, accounts, backup, browser control, analytics, traces. |
+| `/api/team`, `/api/auth`, `/api/users`, `/api/backup`, `/api/browser`, `/api/analytics`, `/api/debug` | Team view, accounts, backup (export, import, schedule, snapshots), browser control, analytics, traces. |
 | `/health` | Liveness. |
 
 Interactive docs are at `/docs`.
@@ -335,7 +336,9 @@ Maintenance runs an hour after start and hourly after that: prune traces by age
 and row cap, activity rows, delivery audit rows, channel dedup ids, received
 channel media, expired compression originals and finished download jobs, then
 checkpoint the write-ahead log. Retention is tunable with the `VW_*_RETENTION_*`
-variables.
+variables. The same pass writes the opt-in scheduled backup snapshot
+(`storage/backup.py:scheduled_backup_once`) when the configured interval has
+elapsed and prunes old scheduled snapshots to the configured count.
 
 ---
 

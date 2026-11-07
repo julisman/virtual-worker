@@ -40,7 +40,7 @@ import socket
 import sqlite3
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import config
@@ -354,23 +354,13 @@ def last_backup_info() -> dict:
     backups under ``<APP_HOME>/backups/``."""
     from storage import settings as settings_store
 
-    backups_dir = config.APP_HOME / "backups"
-    rollbacks: list[dict] = []
-    if backups_dir.exists():
-        for f in sorted(backups_dir.glob("*.vwbak"), reverse=True):
-            try:
-                st = f.stat()
-            except OSError:
-                continue
-            rollbacks.append({
-                "name": f.name,
-                "size": st.st_size,
-                "modifiedAt": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
-            })
+    snapshots = list_snapshots()
     backup_cfg = settings_store.get("backup", {}) or {}
     return {
         "lastExportAt": backup_cfg.get("lastExportAt"),
-        "rollbacks": rollbacks,
+        "rollbacks": [s for s in snapshots if s["kind"] == "rollback"],
+        "scheduled": [s for s in snapshots if s["kind"] == "scheduled"],
+        "schedule": get_schedule(),
         "homePath": str(config.APP_HOME),
     }
 
@@ -382,3 +372,171 @@ def mark_exported() -> None:
     cfg = settings_store.get("backup", {}) or {}
     cfg["lastExportAt"] = _now_iso()
     settings_store.set("backup", cfg)
+
+
+# --------------------------------------------------------------------------- #
+# Scheduled local backups (PRD FR-X3)
+# --------------------------------------------------------------------------- #
+#
+# Opt-in. When enabled, the maintenance loop (hourly) calls ``scheduled_backup_once``
+# which writes ``<APP_HOME>/backups/scheduled-<ts>.vwbak`` once the configured
+# interval has elapsed since the last scheduled snapshot, then keeps only the
+# newest ``keep`` of them. Pre-import rollback snapshots are never pruned here.
+# Settings live under the ``backup`` key next to ``lastExportAt``:
+#   schedule: {enabled, intervalHours, keep, includeModels, redactSecrets}
+#   lastScheduledAt, lastScheduledError
+
+SCHEDULE_DEFAULTS = {
+    "enabled": False,
+    "intervalHours": 24,
+    "keep": 7,
+    "includeModels": False,
+    # A local snapshot that sits next to settings.json gains nothing from
+    # redaction and a restore from it is only complete with the secrets in it.
+    "redactSecrets": False,
+}
+SCHEDULED_PREFIX = "scheduled-"
+
+
+def _backup_cfg() -> dict:
+    from storage import settings as settings_store
+    return dict(settings_store.get("backup", {}) or {})
+
+
+def _save_backup_cfg(cfg: dict) -> None:
+    from storage import settings as settings_store
+    settings_store.set("backup", cfg)
+
+
+def get_schedule() -> dict:
+    cfg = _backup_cfg()
+    sched = {**SCHEDULE_DEFAULTS, **(cfg.get("schedule") or {})}
+    return {
+        **sched,
+        "lastScheduledAt": cfg.get("lastScheduledAt"),
+        "lastScheduledError": cfg.get("lastScheduledError"),
+        "nextDueAt": _next_due(sched, cfg.get("lastScheduledAt")) if sched["enabled"] else None,
+    }
+
+
+def set_schedule(values: dict) -> dict:
+    cfg = _backup_cfg()
+    sched = {**SCHEDULE_DEFAULTS, **(cfg.get("schedule") or {})}
+    for key in SCHEDULE_DEFAULTS:
+        if key in values and values[key] is not None:
+            sched[key] = values[key]
+    sched["enabled"] = bool(sched["enabled"])
+    sched["intervalHours"] = max(1, min(24 * 30, int(sched["intervalHours"])))
+    sched["keep"] = max(1, min(365, int(sched["keep"])))
+    sched["includeModels"] = bool(sched["includeModels"])
+    sched["redactSecrets"] = bool(sched["redactSecrets"])
+    cfg["schedule"] = sched
+    _save_backup_cfg(cfg)
+    return get_schedule()
+
+
+def _next_due(sched: dict, last_iso: str | None) -> str | None:
+    if not last_iso:
+        return _now_iso()
+    try:
+        last = datetime.fromisoformat(last_iso)
+    except ValueError:
+        return _now_iso()
+    return (last + timedelta(hours=int(sched["intervalHours"]))).isoformat()
+
+
+def _is_due(sched: dict, last_iso: str | None, now: datetime) -> bool:
+    if not last_iso:
+        return True
+    try:
+        last = datetime.fromisoformat(last_iso)
+    except ValueError:
+        return True
+    return now - last >= timedelta(hours=int(sched["intervalHours"]))
+
+
+def scheduled_backup_once(*, force: bool = False) -> dict:
+    """Write one scheduled snapshot if the schedule is enabled and due (or
+    ``force``), then prune old scheduled snapshots. Returns a small status
+    dict; never raises (the maintenance loop calls this)."""
+    cfg = _backup_cfg()
+    sched = {**SCHEDULE_DEFAULTS, **(cfg.get("schedule") or {})}
+    if not force and not sched["enabled"]:
+        return {"ran": False, "reason": "disabled"}
+    now = datetime.now(timezone.utc)
+    if not force and not _is_due(sched, cfg.get("lastScheduledAt"), now):
+        return {"ran": False, "reason": "not due"}
+
+    backups = config.ensure_dir(config.APP_HOME / "backups")
+    path = backups / f"{SCHEDULED_PREFIX}{_ts()}.vwbak"
+    try:
+        data, manifest = export_backup(
+            include_models=bool(sched["includeModels"]),
+            redact_secrets=bool(sched["redactSecrets"]),
+        )
+        tmp = path.with_suffix(".part")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except Exception as exc:  # noqa: BLE001 — recorded for the UI, never raised
+        logger.warning("scheduled backup failed: %s", exc)
+        cfg = _backup_cfg()
+        cfg["lastScheduledError"] = str(exc)[:500]
+        _save_backup_cfg(cfg)
+        return {"ran": False, "reason": "error", "error": str(exc)}
+
+    cfg = _backup_cfg()
+    cfg["lastScheduledAt"] = now.isoformat()
+    cfg.pop("lastScheduledError", None)
+    _save_backup_cfg(cfg)
+    pruned = prune_scheduled(int(sched["keep"]))
+    logger.info("scheduled backup written: %s (%d bytes, pruned %d)", path.name, len(data), pruned)
+    return {"ran": True, "file": path.name, "bytes": len(data), "pruned": pruned,
+            "manifest": manifest}
+
+
+def prune_scheduled(keep: int) -> int:
+    """Keep only the newest ``keep`` scheduled snapshots. Returns the count removed."""
+    backups = config.APP_HOME / "backups"
+    if not backups.exists():
+        return 0
+    files = sorted(backups.glob(f"{SCHEDULED_PREFIX}*.vwbak"), reverse=True)
+    removed = 0
+    for f in files[max(0, keep):]:
+        try:
+            f.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def list_snapshots() -> list[dict]:
+    """Every ``.vwbak`` under ``<APP_HOME>/backups``, newest first, tagged by kind."""
+    backups = config.APP_HOME / "backups"
+    out: list[dict] = []
+    if not backups.exists():
+        return out
+    for f in sorted(backups.glob("*.vwbak"), reverse=True):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        out.append({
+            "name": f.name,
+            "kind": "scheduled" if f.name.startswith(SCHEDULED_PREFIX) else "rollback",
+            "size": st.st_size,
+            "modifiedAt": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+        })
+    return out
+
+
+def snapshot_path(name: str) -> Path | None:
+    """Resolve a snapshot file name safely (no path components, must exist)."""
+    if not name or name != Path(name).name or not name.endswith(".vwbak"):
+        return None
+    p = config.APP_HOME / "backups" / name
+    return p if p.is_file() else None
