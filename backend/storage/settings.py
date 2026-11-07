@@ -21,16 +21,7 @@ _lock = threading.Lock()
 
 def _path():
     config.ensure_dir(config.APP_HOME)
-    p = config.APP_HOME / "settings.json"
-    # One-time migration from the pre-rename filename, so an existing install
-    # keeps its persisted settings (e.g. the active model).
-    legacy = config.APP_HOME / "ai-studio.json"
-    if not p.exists() and legacy.exists():
-        try:
-            legacy.rename(p)
-        except OSError:
-            pass
-    return p
+    return config.APP_HOME / "settings.json"
 
 
 def load() -> dict:

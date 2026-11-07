@@ -13,7 +13,7 @@ traces stay there unless you connect something yourself.
 ## From source
 
 ```bash
-git clone <repository-url> virtual-worker
+git clone https://github.com/julisman/virtual-worker.git
 cd virtual-worker
 ./dev.sh
 ```

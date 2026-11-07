@@ -119,5 +119,5 @@ default and reachable from the chat apps you already use.
 - The WhatsApp linked-device transport relies on an unofficial client library.
   Use a dedicated number and read the disclosure in the app.
 
-[Unreleased]: https://github.com/OWNER/virtual-worker/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/OWNER/virtual-worker/releases/tag/v0.1.0
+[Unreleased]: https://github.com/julisman/virtual-worker/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/julisman/virtual-worker/releases/tag/v0.1.0

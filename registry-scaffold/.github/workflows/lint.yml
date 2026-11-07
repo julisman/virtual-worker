@@ -11,8 +11,8 @@ on:
 
 jobs:
   lint:
-    uses: OWNER/virtual-worker/.github/workflows/template-lint.yml@v0.1.0-REPLACE-WITH-IMMUTABLE-REF
+    uses: julisman/virtual-worker/.github/workflows/template-lint.yml@v0.1.0-REPLACE-WITH-IMMUTABLE-REF
     with:
-      lint_repo: OWNER/virtual-worker
+      lint_repo: julisman/virtual-worker
       lint_ref: v0.1.0-REPLACE-WITH-IMMUTABLE-REF
       manifests: templates/*/template.json
