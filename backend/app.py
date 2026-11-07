@@ -39,6 +39,7 @@ from routes.wiki import router as wiki_router
 from routes.mcp import router as mcp_router
 from routes.memory import router as memory_router
 from routes.monitor import router as monitor_router
+from routes.onboarding import router as onboarding_router
 from routes.providers import router as providers_router
 from routes.registries import router as registries_router
 from routes.schedule import router as schedule_router
@@ -282,6 +283,8 @@ app.include_router(tools_router, prefix="/api/tools", tags=["tools"])
 app.include_router(engines_router, prefix="/api/engines", tags=["engines"])
 # Monitoring — live memory/CPU/disk, runtime health, recent errors + log tail.
 app.include_router(monitor_router, prefix="/api/monitor", tags=["monitor"])
+# First-run setup — status + recommendations for the onboarding wizard.
+app.include_router(onboarding_router, prefix="/api/onboarding", tags=["onboarding"])
 # Analytics — historical cost/usage over the captured debug facts (PRD-06).
 app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
 # Schedules — timed agent runs (cron / one-time).

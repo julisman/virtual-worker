@@ -57,7 +57,7 @@ The product is built around five ideas:
 **Goals**
 
 - G1. **One-command local install** on macOS and Linux (Windows via WSL first), with a
-  managed local model runtime and a built-in model hub.
+  managed local model runtime and a built-in model hub. _Guided first-run setup added 2026-11-07._
 - G2. **Workers** with persona, role, model, tools, skills, memory, working folder,
   guardrails, task board, activity feed, schedules and triggers.
 - G3. **One agent harness** shared by all run surfaces, with automatic guardrails and a

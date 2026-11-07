@@ -240,7 +240,8 @@ const CONTENT: Record<string, React.ReactNode> = {
         <><Term>uv</Term> (Python toolchain), <Term>Node / npm</Term>, and <Term>Homebrew</Term> (for llama.cpp).</>,
         <>Run <Code>./setup.sh</Code> any time to (re)bootstrap — it's idempotent.</>,
       ]} />
-      <P><Term>First model, end to end:</Term></P>
+      <P><Term>First launch</Term> — the web UI opens a guided setup: pick a model (download a recommended one for this machine, use one already on disk, or add a provider key), deploy a starter worker from a template, and optionally connect Telegram or Discord. Skip it any time; re-run it from <Term>Settings → First-run setup</Term>.</P>
+      <P><Term>First model by hand:</Term></P>
       <Steps items={[
         <>Open <Term>Models</Term> → <Term>Discover</Term> and search (e.g. a small Unsloth GGUF or MLX model).</>,
         <>Pick a file that shows <Term>Fits</Term> for your device and click <Term>Download</Term> — progress shows live and resumes if interrupted.</>,

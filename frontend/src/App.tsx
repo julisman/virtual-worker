@@ -17,13 +17,14 @@ import { AgentsPage, type Agent } from "@/features/agents/agents-page";
 import { TeamPage } from "@/features/team/team-page";
 import { TemplatesPage, type Template } from "@/features/templates/templates-page";
 import { ChannelsPage } from "@/features/channels/channels-page";
+import { OnboardingPage } from "@/features/onboarding/onboarding-page";
 import { compareSemver } from "@/lib/semver";
 import { SettingsPage } from "@/features/settings/settings-page";
 import { DocsPage } from "@/features/docs/docs-page";
 import { MonitoringPage } from "@/features/monitoring/monitoring-page";
 import { AnalyticsPage } from "@/features/analytics/analytics-page";
 
-type Tab = "playground" | "agents" | "channels" | "team" | "templates" | "knowledge" | "wiki" | "hub"   | "connect"   | "debug" | "monitor" | "analytics" | "docs" | "settings";
+type Tab = "onboarding" | "playground" | "agents" | "channels" | "team" | "templates" | "knowledge" | "wiki" | "hub"   | "connect"   | "debug" | "monitor" | "analytics" | "docs" | "settings";
 
 export interface SessionMeta { id: string; title: string; model: string | null; agentId?: string | null; updatedAt: string; messageCount: number }
 export interface OpenRequest { id: string | null; nonce: number }
@@ -100,6 +101,13 @@ export function App() {
   const { loading: authLoading, teamMode, user, logout } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
   const [tab, setTab] = useState<Tab>("playground");
+  // First run: show the setup wizard until a model (local or provider) can answer,
+  // or until the operator dismisses it. Checked once per load; cheap endpoint.
+  useEffect(() => {
+    apiJson<{ needed: boolean }>("/api/onboarding/status")
+      .then((s) => { if (s.needed) setTab("onboarding"); })
+      .catch(() => { /* backend still starting — stay on Chat */ });
+  }, []);
   const [agentsSub, setAgentsSub] = useState<AgentsSub>("agents");
   // Nav group toggles (Model, Plugins). Unset = open only while a child is active.
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
@@ -449,6 +457,11 @@ export function App() {
         <div className={`h-full ${tab === "hub" ? "" : "hidden"}`}>
           <HubPage />
         </div>
+        {tab === "onboarding" && (
+          <OnboardingPage
+            onDone={(id) => { loadAgents(); if (id) chatWithAgent(id); else setTab("playground"); }}
+            onSkip={() => setTab("playground")} />
+        )}
         <div className={`h-full ${tab === "channels" ? "" : "hidden"}`}>
           <ChannelsPage />
         </div>

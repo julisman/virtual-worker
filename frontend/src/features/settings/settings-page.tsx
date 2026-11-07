@@ -157,6 +157,12 @@ export function SettingsPage() {
           </p>
 
           <BrowserCard />
+          <section className="mt-8 rounded-2xl border border-line bg-canvas p-5">
+            <h3 className="text-[11px] font-extrabold uppercase tracking-wide text-mute">First-run setup</h3>
+            <p className="mt-1 text-xs text-mute">Re-open the guided setup: pick a model, deploy a starter worker, connect a chat app.</p>
+            <button onClick={async () => { await apiPost("/api/onboarding/reset", {}).catch(() => {}); window.location.reload(); }}
+              className="mt-3 rounded-xl border border-pressed px-3 py-1.5 text-xs font-medium text-body hover:bg-soft hover:text-ink">Run setup again</button>
+          </section>
           <EmailCard />
           <BackupCard />
           <VisionHelperCard />

@@ -88,6 +88,11 @@ MCP server, a remote upstream, or a connected chat channel.
 Dev and service use different default ports and data directories (`./data` for dev,
 `~/.virtual-worker` for the service), so both can run side by side.
 
+The first time the web UI opens, a guided setup walks you through picking a model
+(download a recommended one, use one already on disk, or add a provider key), deploying
+a starter worker from a template, and optionally connecting Telegram or Discord. Re-run
+it any time from Settings.
+
 Either launcher bootstraps on first run via `setup.sh` (backend venv with `uv`, frontend
 deps, llama.cpp via Homebrew, and the MLX engines on Apple Silicon). Prerequisites it
 cannot install for you: **uv**, **Node.js**, and **Homebrew** (for llama.cpp). Then open
