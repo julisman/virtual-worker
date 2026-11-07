@@ -47,8 +47,6 @@ class AgentIn(BaseModel):
     dutyStatus: str | None = None
     guardrails: dict | None = None
     webSearch: dict | None = None   # { provider, apiKey, searxngUrl } for browser_search
-    cases: dict | None = None
-    metrics: dict | None = None
     tools: list[str] | None = None
     skills: list[str] | None = None
     mcpServers: list[str] | None = None

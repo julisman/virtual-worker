@@ -16,8 +16,9 @@ The same commands work with `python lint.py`. `lint` prints one result and the
 canonical SHA-256 digest per file. A changed digest requires a higher semver
 version for the same `(sourceId, templateId)` lineage. With `--baseline`, the
 prior checkout is searched recursively. Without it, the tool resolves a git
-merge-base against `origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME` (or the
-default branch / `main`). New templates pass; removed and moved templates are
+merge-base against the pull-request base branch (`GITHUB_BASE_REF` on GitHub
+Actions, `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` on GitLab, or
+`TEMPLATE_LINT_TARGET_BRANCH`; default `main`). New templates pass; removed and moved templates are
 not treated as republished versions. A shallow checkout that cannot resolve a
 merge-base is a blocking, actionable error: fetch the target branch or run
 `git fetch --unshallow`.
@@ -33,3 +34,9 @@ reviewed fingerprint explaining why it is safe.
 `schema_fields()`. The generated marker records the lint version. `VERSION`
 markers in a scaffold and schema-doc markers are warnings when they differ;
 they never make a build fail.
+
+## In CI
+
+This repository runs the tool on every push and pull request (`template-lint`
+job in `.github/workflows/ci.yml`). A registry repository reuses the same job by
+calling the published workflow; see `registry-scaffold/.github/workflows/lint.yml`.

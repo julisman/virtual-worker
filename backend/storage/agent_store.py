@@ -337,10 +337,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # Guarded migration: attached Knowledge Wiki ids (JSON; OKF wikis, PRD-13).
     if "wikis" not in cols:
         conn.execute("ALTER TABLE agents ADD COLUMN wikis TEXT")
-    if "cases" not in cols:
-        conn.execute("ALTER TABLE agents ADD COLUMN cases TEXT")
-    if "metrics" not in cols:
-        conn.execute("ALTER TABLE agents ADD COLUMN metrics TEXT")
     # Guarded migration: vision-helper agent id (an agent this one delegates image
     # description to when its own model is text-only; "" = use the global default).
     if "vision_helper_agent_id" not in cols:
@@ -406,8 +402,6 @@ def _row_to_agent(r: sqlite3.Row) -> dict:
         "connectors": json.loads(r["connectors"]) if "connectors" in r.keys() and r["connectors"] else [],
         "knowledgeBases": json.loads(r["knowledge_bases"]) if "knowledge_bases" in r.keys() and r["knowledge_bases"] else [],
         "wikis": json.loads(r["wikis"]) if "wikis" in r.keys() and r["wikis"] else [],
-        "cases": json.loads(r["cases"]) if "cases" in r.keys() and r["cases"] else {},
-        "metrics": json.loads(r["metrics"]) if "metrics" in r.keys() and r["metrics"] else {},
         "visionHelperAgentId": (r["vision_helper_agent_id"] if "vision_helper_agent_id" in r.keys() else "") or "",
         "templateRef": json.loads(r["template_ref"]) if "template_ref" in r.keys() and r["template_ref"] else None,
         "createdAt": r["created_at"],
@@ -469,8 +463,8 @@ def create_agent(data: dict) -> dict:
         conn.execute(
             "INSERT INTO agents (id, name, description, persona, model, model_source, provider, "
             "temperature, top_p, top_k, repeat_penalty, reasoning_effort, cache_ttl, working_dir, role, duty_status, guardrails, web_search, tools, skills, "
-            "mcp_servers, mcp_tool_allow, custom_tools, connectors, knowledge_bases, wikis, cases, metrics, vision_helper_agent_id, template_ref, connector_grants, ask_budget, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "mcp_servers, mcp_tool_allow, custom_tools, connectors, knowledge_bases, wikis, vision_helper_agent_id, template_ref, connector_grants, ask_budget, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (agent_id, data.get("name") or "Untitled agent", data.get("description") or "",
              data.get("persona") or "", data.get("model") or None,
              _source(data.get("modelSource")), (data.get("provider") or "").strip() or None,
@@ -487,8 +481,7 @@ def create_agent(data: dict) -> dict:
              json.dumps(data.get("customTools") or []),
              json.dumps(data.get("connectors") or []),
              json.dumps(data.get("knowledgeBases") or []),
-             json.dumps(data.get("wikis") or []), json.dumps(data.get("cases") or {}),
-             json.dumps(data.get("metrics") or {}),
+             json.dumps(data.get("wikis") or []),
              str(data.get("visionHelperAgentId") or "").strip(),
              json.dumps(data.get("templateRef")) if data.get("templateRef") else None,
              json.dumps(_connector_grants(data.get("connectorGrants"))),
@@ -524,7 +517,7 @@ def update_agent(agent_id: str, data: dict) -> dict | None:
             conn.execute(
                 "UPDATE agents SET name=?, description=?, persona=?, model=?, model_source=?, provider=?, "
                 "temperature=?, top_p=?, top_k=?, repeat_penalty=?, reasoning_effort=?, cache_ttl=?, working_dir=?, role=?, duty_status=?, guardrails=?, web_search=?, tools=?, "
-                "skills=?, mcp_servers=?, mcp_tool_allow=?, custom_tools=?, connectors=?, knowledge_bases=?, wikis=?, cases=?, metrics=?, vision_helper_agent_id=?, template_ref=?, connector_grants=?, ask_budget=?, updated_at=? WHERE id=?",
+                "skills=?, mcp_servers=?, mcp_tool_allow=?, custom_tools=?, connectors=?, knowledge_bases=?, wikis=?, vision_helper_agent_id=?, template_ref=?, connector_grants=?, ask_budget=?, updated_at=? WHERE id=?",
                 (merged["name"], merged.get("description") or "", merged.get("persona") or "",
                  merged.get("model") or None,
                  _source(merged.get("modelSource")), (merged.get("provider") or "").strip() or None,
@@ -541,8 +534,7 @@ def update_agent(agent_id: str, data: dict) -> dict | None:
                  json.dumps(merged.get("customTools") or []),
                  json.dumps(merged.get("connectors") or []),
                  json.dumps(merged.get("knowledgeBases") or []),
-                 json.dumps(merged.get("wikis") or []), json.dumps(merged.get("cases") or {}),
-                 json.dumps(merged.get("metrics") or {}),
+                 json.dumps(merged.get("wikis") or []),
                  str(merged.get("visionHelperAgentId") or "").strip(),
                  json.dumps(merged.get("templateRef")) if merged.get("templateRef") else None,
                  json.dumps(_connector_grants(merged.get("connectorGrants"))),

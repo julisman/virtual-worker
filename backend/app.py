@@ -23,6 +23,7 @@ from routes.analytics import router as analytics_router
 from routes.anthropic import router as anthropic_router
 from routes.auth import router as auth_router
 from routes.backup import router as backup_router
+from routes.feedback import router as feedback_router
 from routes.browser import router as browser_router
 from routes.channels import router as channels_router
 from routes.chat import router as chat_router
@@ -287,6 +288,7 @@ app.include_router(monitor_router, prefix="/api/monitor", tags=["monitor"])
 app.include_router(onboarding_router, prefix="/api/onboarding", tags=["onboarding"])
 # Analytics — historical cost/usage over the captured debug facts (PRD-06).
 app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
+app.include_router(feedback_router, prefix="/api/feedback", tags=["feedback"])
 # Schedules — timed agent runs (cron / one-time).
 app.include_router(schedule_router, prefix="/api/agents", tags=["schedules"])
 # Delivery — outbound channels + audit log (in-app chat, desktop, webhook).

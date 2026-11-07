@@ -1,12 +1,12 @@
 # {{TEAM_NAME}} Virtual Worker template registry
 
-Copy this directory into a new GitLab repository and replace `{{TEAM_NAME}}`.
+Copy this directory into a new git repository and replace `{{TEAM_NAME}}`.
 The registry convention is `templates/<template-id>/template.json`; deployable
 JSON contains no comments or secret values.
 
 For a **dedicated** template repository, keep this layout at the root (as the
 scaffold ships). If the repository holds other things too, put the registry
-content (`templates/` + `skills/`) under a `ves-registry/` directory — Virtual Worker
+content (`templates/` + `skills/`) under a `vw-registry/` directory — Virtual Worker
 auto-detects that name — or under any directory of your choosing, which each
 member then enters as the registry's *Subdirectory* when adding it in Virtual Worker.
 
@@ -34,6 +34,8 @@ bump checklist.
 
 ## Publishing
 
-See [docs/publishing.md](docs/publishing.md). CI includes a pinned copy of the
-Virtual Worker lint job; replace the placeholder ref with an immutable protected tag or
-full SHA before enabling the repository.
+See [docs/publishing.md](docs/publishing.md). `.github/workflows/lint.yml` calls
+the Virtual Worker lint workflow at a pinned ref; replace the placeholder owner and
+ref with your fork and an immutable tag or full SHA before enabling the repository.
+On another CI system, run `tools/template-lint/lint.py` from a pinned Virtual Worker
+checkout the same way.

@@ -4,7 +4,7 @@
 // Reads /api/analytics/*. Virtual Worker brand theme (navy on cream), CSS/SVG charts only.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiJson } from "@/lib/api";
+import { apiFetch, apiJson } from "@/lib/api";
 
 // --------------------------------------------------------------------------- //
 // Types (mirror routes/analytics.py)
@@ -378,9 +378,105 @@ export function AnalyticsPage() {
         <ScorecardGrid cards={cards} />
       </div>
 
+      {/* Feedback */}
+      <div className="mt-5">
+        <h2 className="mb-3 font-display text-lg font-semibold tracking-tight text-ink">feedback</h2>
+        <FeedbackCard />
+      </div>
+
       <p className="mt-6 text-center text-[11px] text-mute">
         {range.from} → {range.to} · read-only over captured Debug data · cost is an estimate (hosted models priced, local = $0)
       </p>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Feedback — ratings and corrections captured on chat turns (Chat shows the
+// thumbs + edit bar). Reads /api/feedback; export is a curated JSONL download.
+// --------------------------------------------------------------------------- //
+
+interface FeedbackCounts { up: number; down: number; edit: number; total: number; trainable: number }
+interface FeedbackRow {
+  id: string; agentId: string | null; sessionId: string | null; signal: string;
+  userPrompt: string; original: string; corrected: string | null; model: string | null; createdAt: string;
+}
+
+function FeedbackCard() {
+  const [counts, setCounts] = useState<FeedbackCounts | null>(null);
+  const [rows, setRows] = useState<FeedbackRow[]>([]);
+  const [signal, setSignal] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [c, r] = await Promise.all([
+        apiJson<FeedbackCounts>("/api/feedback/counts"),
+        apiJson<{ feedback: FeedbackRow[] }>(`/api/feedback?limit=100${signal ? `&signal=${signal}` : ""}`),
+      ]);
+      setCounts(c); setRows(r.feedback); setErr(null);
+    } catch (e) { setErr(e instanceof Error ? e.message : "failed to load feedback"); }
+  }, [signal]);
+  useEffect(() => { load(); }, [load]);
+
+  const remove = async (id: string) => {
+    try { await apiFetch(`/api/feedback/${id}`, { method: "DELETE" }); await load(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+
+  const tone = (s: string) => s === "up" ? "bg-success-soft text-success" : s === "down" ? "bg-danger-soft text-danger" : "bg-primary-soft text-primary-deep";
+
+  return (
+    <div className="rounded-2xl border border-line bg-canvas p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm text-body">
+          Ratings and corrections you give replies in Chat. Up and edited turns become training
+          examples; down turns are kept out of the export.
+        </p>
+        <span className="ml-auto" />
+        {counts && (
+          <>
+            <span className="rounded-full bg-success-soft px-2.5 py-0.5 text-[11px] font-semibold text-success">{counts.up} up</span>
+            <span className="rounded-full bg-danger-soft px-2.5 py-0.5 text-[11px] font-semibold text-danger">{counts.down} down</span>
+            <span className="rounded-full bg-primary-soft px-2.5 py-0.5 text-[11px] font-semibold text-primary-deep">{counts.edit} edited</span>
+          </>
+        )}
+        <select value={signal} onChange={(e) => setSignal(e.target.value)} aria-label="Signal"
+          className="rounded-xl border border-line bg-canvas px-3 py-1.5 text-xs text-ink focus:border-primary focus:outline-none">
+          <option value="">All</option><option value="up">Up</option><option value="down">Down</option><option value="edit">Edited</option>
+        </select>
+        <a href="/api/feedback/export" download
+          className={`rounded-xl border border-pressed px-3 py-1.5 text-xs font-medium ${counts?.trainable ? "text-ink hover:bg-soft" : "pointer-events-none text-mute opacity-50"}`}
+          title="Download the curated examples as chat-format JSONL">
+          Export JSONL{counts ? ` (${counts.trainable})` : ""}
+        </a>
+      </div>
+      {err && <p className="mt-3 rounded-xl border border-danger-soft bg-danger-soft px-3 py-2 text-xs text-danger">{err}</p>}
+      {rows.length === 0 ? (
+        <p className="mt-3 text-xs text-mute">No feedback yet. Use the thumbs or the pencil under a reply in Chat.</p>
+      ) : (
+        <ul className="mt-3 divide-y divide-line">
+          {rows.map((r) => (
+            <li key={r.id} className="py-2">
+              <div className="flex cursor-pointer items-center gap-2" onClick={() => setOpen(open === r.id ? null : r.id)}>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${tone(r.signal)}`}>{r.signal}</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-ink">{r.userPrompt || "(no prompt)"}</span>
+                <span className="shrink-0 text-[11px] text-mute">{new Date(r.createdAt).toLocaleString()}</span>
+                <button onClick={(e) => { e.stopPropagation(); remove(r.id); }} className="text-mute hover:text-danger" title="Delete">✕</button>
+              </div>
+              {open === r.id && (
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-xl bg-softer p-2 font-mono text-[11px] text-body">{r.original || "(empty)"}</pre>
+                  {r.signal === "edit" && (
+                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-xl bg-primary-soft p-2 font-mono text-[11px] text-ink">{r.corrected}</pre>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

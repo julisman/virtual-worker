@@ -31,7 +31,7 @@ _SEMVER = re.compile(
 def _load_manifest_module():
     """Load only the pure manifest implementation, with no package imports."""
     path = Path(__file__).resolve().parents[2] / "backend" / "storage" / "template_manifest.py"
-    spec = importlib.util.spec_from_file_location("ves_pure_template_manifest", path)
+    spec = importlib.util.spec_from_file_location("vw_pure_template_manifest", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load manifest validator at {path}")
     module = importlib.util.module_from_spec(spec)
@@ -242,7 +242,11 @@ def resolve_git_merge_base(path: Path) -> tuple[Path | None, str | None]:
     git_dir = Path(git_dir_result.stdout.strip()) if git_dir_result.returncode == 0 else root / ".git"
     if not git_dir.is_absolute():
         git_dir = root / git_dir
-    target = os.environ.get("CI_MERGE_REQUEST_TARGET_BRANCH_NAME") or os.environ.get("CI_DEFAULT_BRANCH") or "main"
+    # GitHub Actions exposes the PR base as GITHUB_BASE_REF; GitLab uses the CI_* names.
+    target = (os.environ.get("TEMPLATE_LINT_TARGET_BRANCH")
+              or os.environ.get("GITHUB_BASE_REF")
+              or os.environ.get("CI_MERGE_REQUEST_TARGET_BRANCH_NAME")
+              or os.environ.get("CI_DEFAULT_BRANCH") or "main")
     refs = [f"origin/{target}", target, "FETCH_HEAD"]
     for ref in refs:
         if _git(["rev-parse", "--verify", ref], root).returncode == 0:

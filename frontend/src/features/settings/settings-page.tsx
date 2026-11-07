@@ -166,8 +166,6 @@ export function SettingsPage() {
           <EmailCard />
           <BackupCard />
           <VisionHelperCard />
-          {/* Global PRD-31 metrics config (review loop, default reviewer, cost
-              cap) — also reachable via the ⚙ shortcut on Analytics → Efficiency. */}
           <TeamSettings />
         </div>
       </div>

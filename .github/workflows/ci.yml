@@ -62,3 +62,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash -n dev.sh && bash -n setup.sh && bash -n vw
+
+  template-lint:
+    name: Template lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install pytest
+        run: pip install pytest
+      - name: Tool tests
+        run: python -m pytest -q tools/template-lint/tests
+      - name: Lint the scaffold example
+        run: python tools/template-lint/lint.py lint registry-scaffold/templates/*/template.json
+      - name: Schema doc is current
+        run: |
+          python tools/template-lint/lint.py docs /tmp/schema.md
+          diff -u registry-scaffold/docs/schema.md /tmp/schema.md

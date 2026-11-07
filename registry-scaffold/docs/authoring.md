@@ -202,7 +202,7 @@ manifest or ask the template to re-export it.
 - Deploy or update the worked-on template on your own agent and verify the
   result, including the update/restore behavior and any connector test.
 - Follow [publishing.md](publishing.md) for the export → verify → Download from
-  the gallery card → MR → version-bump flow. Let CI perform the manifest and
+  the gallery card → pull request → version-bump flow. Let CI perform the manifest and
   secret lint; do not treat a clean local intuition as a substitute for it.
 
 This guide pairs with [schema.md](schema.md) for fields and

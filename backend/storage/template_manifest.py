@@ -48,11 +48,7 @@ V1 = {
     "schemaVersion",
 } | LEGACY_METADATA_KEYS | LOCAL_DERIVED_KEYS
 V2 = V1 | {"requiresFeatures", "metadata", "customTools", "connectors",
-           "wikis", "knowledgeBases", "mcpServers",
-           # Per-agent behavior configs a template may seed (PRD-22 case
-           # management, PRD-31 efficiency metrics). Optional objects — only
-           # present when non-empty, so pre-existing manifests keep their digests.
-           "cases", "metrics"}
+           "wikis", "knowledgeBases", "mcpServers"}
 
 _DEFAULTS = {
     "name": "Untitled template",
@@ -549,15 +545,6 @@ def validate_and_normalize(raw: dict) -> dict:
         out["requiresFeatures"] = sorted(
             set(requires_features) | set(derive_requires_features(out))
         )
-        # Optional behavior configs (PRD-22 cases, PRD-31 metrics): present in
-        # the canonical form only when non-empty, so manifests that predate
-        # them keep their digests byte-for-byte.
-        for field in ("cases", "metrics"):
-            value = raw.get(field)
-            if value is not None and not isinstance(value, dict):
-                raise ManifestError(f"template field '{field}' must be an object")
-            if value:
-                out[field] = _object_field(value, field, {})
     _validate_secret_placeholders(
         out,
         {

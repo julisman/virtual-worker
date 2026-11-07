@@ -756,10 +756,6 @@ def deploy_template(template_id: str, variables: dict | None = None,
         "knowledgeBases": resources["knowledgeBases"],
         "mcpServers": resources["mcpServers"],
         "mcpToolAllow": resources.get("mcpToolAllow") or {},
-        # PRD-22/PRD-31 behavior configs seeded at deploy (never sync-managed —
-        # instance-local tweaks like reviewer/exclusions must survive updates).
-        "cases": copy.deepcopy(tpl.get("cases") or {}),
-        "metrics": copy.deepcopy(tpl.get("metrics") or {}),
         "templateRef": template_ref,
     })
 
@@ -943,31 +939,6 @@ def _export_agent_resources(agent: dict) -> tuple[list[dict], list[dict], list[d
             mcp_servers, list(secret_vars.values()))
 
 
-def _portable_metrics(agent: dict) -> dict:
-    """The agent's PRD-31 metrics config minus instance-local references.
-
-    ``reviewerAgentId`` names an agent on *this* machine and the exclusion
-    lists carry deployment-specific chat ids — neither travels.
-    """
-    cfg = agent.get("metrics")
-    if not isinstance(cfg, dict) or not cfg:
-        return {}
-    out = {k: copy.deepcopy(v) for k, v in cfg.items()
-           if k not in ("reviewerAgentId", "excludedConversations", "excludedUsers")}
-    return out
-
-
-def _portable_cases(agent: dict) -> dict:
-    """The agent's PRD-22 case config minus instance-local escalation targets."""
-    cfg = agent.get("cases")
-    if not isinstance(cfg, dict) or not cfg:
-        return {}
-    out = copy.deepcopy(cfg)
-    escalation = out.get("escalation")
-    if isinstance(escalation, dict):
-        escalation.pop("defaultContact", None)
-        escalation.pop("groupId", None)
-    return out
 
 
 def template_from_agent(agent_id: str, *, name: str | None = None,
@@ -1015,11 +986,9 @@ def template_from_agent(agent_id: str, *, name: str | None = None,
     # declared secret variables — never values.
     (custom_tools, connectors, wikis, knowledge_bases, mcp_servers,
      secret_variables) = _export_agent_resources(agent)
-    portable_cases = _portable_cases(agent)
-    portable_metrics = _portable_metrics(agent)
     # cases/metrics are v2-only manifest sections — a v1 build rejects the keys.
     is_v2 = bool(custom_tools or connectors or wikis or knowledge_bases
-                 or mcp_servers or portable_cases or portable_metrics)
+                 or mcp_servers)
 
     tpl = {
         "id": _slugify(tpl_name),
@@ -1047,10 +1016,6 @@ def template_from_agent(agent_id: str, *, name: str | None = None,
         tpl["wikis"] = wikis
         tpl["knowledgeBases"] = knowledge_bases
         tpl["mcpServers"] = mcp_servers
-        if portable_cases:
-            tpl["cases"] = portable_cases
-        if portable_metrics:
-            tpl["metrics"] = portable_metrics
     if target_template_id:
         # Publish into an existing lineage: the target's templateId is the folder
         # identity the import matches against.

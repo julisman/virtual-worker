@@ -503,9 +503,9 @@ async function readFile(file: File): Promise<Pending> {
 }
 
 // --------------------------------------------------------------------------- //
-// Feedback bar (PRD-12) — 👍 / 👎 / edit on an assistant turn. Posts to
-// /api/feedback; those signals later curate into a Train dataset. This is purely
-// additive — it never touches the streaming/save path above.
+// Feedback bar — 👍 / 👎 / edit on an assistant turn. Posts to /api/feedback;
+// the signals are listed under Analytics → feedback and export as JSONL. This is
+// purely additive — it never touches the streaming/save path above.
 // --------------------------------------------------------------------------- //
 
 function FeedbackBar({ sessionId, agentId, model, userPrompt, original, turnIndex }: {
@@ -534,13 +534,13 @@ function FeedbackBar({ sessionId, agentId, model, userPrompt, original, turnInde
 
   const rate = async (s: "up" | "down") => {
     setSignal(s);
-    if (await post({ signal: s })) setSaved("Captured for training");
+    if (await post({ signal: s })) setSaved("Feedback saved");
   };
   const saveEdit = async () => {
     const corrected = draft.trim();
     if (!corrected) return;
     if (await post({ signal: "edit", correctedText: corrected })) {
-      setSignal("edit"); setEditing(false); setSaved("Correction captured for training");
+      setSignal("edit"); setEditing(false); setSaved("Correction saved");
     }
   };
 
@@ -568,7 +568,7 @@ function FeedbackBar({ sessionId, agentId, model, userPrompt, original, turnInde
             className="rounded-full border border-pressed px-3 py-1 text-xs text-body hover:bg-soft hover:text-ink">
             Cancel
           </button>
-          <span className="text-[10px] text-mute">trains the model on your version</span>
+          <span className="text-[10px] text-mute">kept as a training example under Analytics</span>
         </div>
       </div>
     );
@@ -576,8 +576,8 @@ function FeedbackBar({ sessionId, agentId, model, userPrompt, original, turnInde
 
   return (
     <div className="mt-2 flex items-center gap-1.5">
-      <button onClick={() => rate("up")} className={btn(signal === "up")} title="Good reply — keep as a training example"><ThumbUp /></button>
-      <button onClick={() => rate("down")} className={btn(signal === "down")} title="Bad reply — exclude from training"><ThumbDown /></button>
+      <button onClick={() => rate("up")} className={btn(signal === "up")} title="Good reply"><ThumbUp /></button>
+      <button onClick={() => rate("down")} className={btn(signal === "down")} title="Bad reply"><ThumbDown /></button>
       <button onClick={() => { setDraft(original); setEditing(true); }} className={btn(signal === "edit")} title="Edit this reply into a correction"><Pencil /></button>
       {saved && <span className="ml-1 text-[10px] text-success">✓ {saved}</span>}
     </div>

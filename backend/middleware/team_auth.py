@@ -73,6 +73,7 @@ _ROLE_POLICY: dict[str, str] = {
     "/api/templates": "member",
     "/api/triggers": "member",
     "/api/deliver": "member",
+    "/api/feedback": "member",
     "/api/auth/logout": "viewer",
 }
 

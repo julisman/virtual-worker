@@ -1,0 +1,18 @@
+# Lints every template manifest on each push and pull request using the
+# Virtual Worker template-lint tool. Replace `lint_repo` with the Virtual Worker
+# repository you deploy from and pin `lint_ref` to an immutable tag or full
+# commit SHA reviewed by your team. Never point it at main.
+name: Template lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    uses: OWNER/virtual-worker/.github/workflows/template-lint.yml@v0.1.0-REPLACE-WITH-IMMUTABLE-REF
+    with:
+      lint_repo: OWNER/virtual-worker
+      lint_ref: v0.1.0-REPLACE-WITH-IMMUTABLE-REF
+      manifests: templates/*/template.json

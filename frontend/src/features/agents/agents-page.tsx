@@ -84,10 +84,6 @@ export interface Agent {
   dutyStatus: string;
   guardrails: Guardrails;
   webSearch: WebSearch;
-  cases: CasesConfig;
-  // PRD-31: efficiency-metrics scoring config (episode gap, office hours,
-  // business-value assumptions, exclusions). Defaults-merged like `cases`.
-  metrics: MetricsConfig;
   tools: string[];
   skills: string[];
   mcpServers: string[];
@@ -146,94 +142,6 @@ export interface WebSearch {
 }
 
 const DEFAULT_WEB_SEARCH: WebSearch = { provider: "searxng", apiKey: "", searxngUrl: "" };
-
-// PRD-22: On-Duty Case Management — per-agent config for how a case's escalation
-// ladder + timing windows behave. Disabled by default (opt-in per agent).
-export interface CasesEscalation {
-  ladder: string[];
-  ackTimeoutMinutes: number;
-  defaultContact: string | null;
-  groupId: string | null;
-}
-export interface CasesConfig {
-  enabled: boolean;
-  prefix: string | null;
-  reopenWindowHours: number;
-  staleAfterHours: number;
-  // PRD-22 escalated staleness: an idle escalated case auto-stales after this
-  // (longer) fuse, but only after a final warning + grace window. Optional —
-  // backend defaults apply (120h / 24h) when omitted.
-  escalatedStaleAfterHours?: number;
-  staleGraceHours?: number;
-  escalation: CasesEscalation;
-  // PRD-22 M-sync: which case-sync target this agent's cases push to.
-  // Omitted/undefined = Default target; "none" = keep this agent's cases local.
-  syncTarget?: string | null;
-}
-
-const DEFAULT_CASES: CasesConfig = {
-  enabled: false, prefix: null, reopenWindowHours: 24, staleAfterHours: 48,
-  escalatedStaleAfterHours: 120, staleGraceHours: 24,
-  escalation: { ladder: ["thread", "dm", "group"], ackTimeoutMinutes: 30, defaultContact: null, groupId: null },
-  syncTarget: undefined,
-};
-
-// PRD-31: Agent Efficiency Metrics — per-agent config for episode/case scoring
-// timers, office hours, business-value assumptions, and read-time exclusions.
-// Disabled by default (opt-in per agent); resolves agent → global → code default.
-export interface MetricsBusinessMultipliers {
-  minPerQuestion: number | null;
-  minPerIncident: number | null;
-  hourlyRateUsd: number | null;
-}
-export interface MetricsOfficeHours {
-  days: string[];
-  start: string;
-  end: string;
-}
-// PRD-31 M2: the review-round timers + sampling + reviewer override — a
-// close-prompt fires after `quietHours` of silence (per-severity override),
-// stays armed for `voteWindowHours`; `calibrationSamplePct`/`qaReviewSamplePct`
-// sample non-case Q&A episodes; `reviewerAgentId` overrides the global reviewer
-// (null = inherit global; the current agent is excluded — it can't self-review).
-export interface MetricsClosePrompt {
-  enabled: boolean;
-  quietHours: number;
-  perSeverity: { high: number };
-  voteWindowHours: number;
-}
-export interface MetricsConfig {
-  enabled: boolean;
-  episodeGapMinutes: number;
-  officeHours: MetricsOfficeHours;
-  timezone: string;
-  businessMultipliers: MetricsBusinessMultipliers;
-  excludedConversations: string[];
-  excludedUsers: string[];
-  recurrenceWindowDays: number;
-  closePrompt: MetricsClosePrompt;
-  calibrationSamplePct: number;
-  qaReviewSamplePct: number;
-  reviewerAgentId: string | null;
-}
-
-const DEFAULT_CLOSE_PROMPT: MetricsClosePrompt = {
-  enabled: true, quietHours: 4, perSeverity: { high: 1 }, voteWindowHours: 24,
-};
-
-const DEFAULT_METRICS: MetricsConfig = {
-  enabled: false, episodeGapMinutes: 120,
-  officeHours: { days: ["mon", "tue", "wed", "thu", "fri"], start: "09:00", end: "18:00" },
-  timezone: "Asia/Jakarta",
-  businessMultipliers: { minPerQuestion: null, minPerIncident: null, hourlyRateUsd: null },
-  excludedConversations: [], excludedUsers: [], recurrenceWindowDays: 7,
-  closePrompt: { ...DEFAULT_CLOSE_PROMPT, perSeverity: { ...DEFAULT_CLOSE_PROMPT.perSeverity } },
-  calibrationSamplePct: 8, qaReviewSamplePct: 10, reviewerAgentId: null,
-};
-
-// A short curated timezone list — the metrics office-hours calendar doesn't
-// need every IANA zone, just the ones the fleet actually runs in.
-
 
 export interface Guardrails {
   shell: "auto" | "off" | "readonly" | "workspace";
@@ -407,13 +315,6 @@ const blankAgent = (): Agent => ({
   cacheTtl: "",
   temperature: 0.6, topP: 0.95, topK: 64, repeatPenalty: null, reasoningEffort: "", visionHelperAgentId: "", workingDir: "", role: "", dutyStatus: "off",
   guardrails: { ...DEFAULT_GUARDRAILS }, webSearch: { ...DEFAULT_WEB_SEARCH },
-  cases: { ...DEFAULT_CASES, escalation: { ...DEFAULT_CASES.escalation } },
-  metrics: {
-    ...DEFAULT_METRICS,
-    officeHours: { ...DEFAULT_METRICS.officeHours },
-    businessMultipliers: { ...DEFAULT_METRICS.businessMultipliers },
-    closePrompt: { ...DEFAULT_METRICS.closePrompt, perSeverity: { ...DEFAULT_METRICS.closePrompt.perSeverity } },
-  },
   tools: [], skills: [], mcpServers: [], mcpToolAllow: {}, customTools: [], connectors: [], connectorGrants: {}, askBudget: null, knowledgeBases: [], wikis: [], updatedAt: "",
   templateRef: null,
 });
@@ -471,7 +372,7 @@ function AgentsPanel({
   const [draft, setDraft] = useState<Agent>(blankAgent());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<"overview" | "board" | "cases" | "activity" | "schedule" | "triggers" | "conversations" | "inbox" | "settings">("settings");
+  const [view, setView] = useState<"overview" | "board" | "activity" | "schedule" | "triggers" | "conversations" | "inbox" | "settings">("settings");
   const [section, setSection] = useState<SettingsSection>("identity");
   const toast = useToast();
 
@@ -516,26 +417,7 @@ function AgentsPanel({
   // Mirror the selected agent (or a blank one when creating) into the editable draft.
   useEffect(() => {
     if (creating) { setDraft(blankAgent()); setError(null); }
-    // The backend sends `cases: {}` (or a partial object) for agents that never
-    // configured it — deep-merge over the defaults so nested reads never crash.
-    else if (selected) {
-      const c = selected.cases as Partial<CasesConfig> | undefined;
-      const m = selected.metrics as Partial<MetricsConfig> | undefined;
-      setDraft({
-        ...selected,
-        cases: { ...DEFAULT_CASES, ...(c ?? {}), escalation: { ...DEFAULT_CASES.escalation, ...(c?.escalation ?? {}) } },
-        metrics: {
-          ...DEFAULT_METRICS, ...(m ?? {}),
-          officeHours: { ...DEFAULT_METRICS.officeHours, ...(m?.officeHours ?? {}) },
-          businessMultipliers: { ...DEFAULT_METRICS.businessMultipliers, ...(m?.businessMultipliers ?? {}) },
-          closePrompt: {
-            ...DEFAULT_METRICS.closePrompt, ...(m?.closePrompt ?? {}),
-            perSeverity: { ...DEFAULT_METRICS.closePrompt.perSeverity, ...(m?.closePrompt?.perSeverity ?? {}) },
-          },
-        },
-      });
-      setError(null);
-    }
+    else if (selected) { setDraft({ ...selected }); setError(null); }
   }, [creating, selected]);
 
   const patch = (p: Partial<Agent>) => setDraft((d) => ({ ...d, ...p }));
@@ -571,8 +453,6 @@ function AgentsPanel({
       visionHelperAgentId: draft.visionHelperAgentId,
       workingDir: draft.workingDir, role: draft.role, guardrails: draft.guardrails,
       webSearch: draft.webSearch,
-      cases: draft.cases,
-      metrics: draft.metrics,
       tools: draft.tools, skills: draft.skills, mcpServers: draft.mcpServers,
       mcpToolAllow: draft.mcpToolAllow,
       customTools: draft.customTools,

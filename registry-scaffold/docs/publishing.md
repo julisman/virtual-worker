@@ -5,19 +5,19 @@
 2. Save the template to the gallery / registry workspace and review the
    deployable JSON. Keep credential values out; secret variables are bindings,
    not secrets.
-3. Open a merge request against this registry. Run the lint job and review the
+3. Open a pull request against this registry. Run the lint job and review the
    digest, warnings, and schema changes.
 4. If the canonical digest changed for an existing `(sourceId, templateId)`
    lineage, increment `version` with valid semver. A new lineage is a first
    publication and does not need an old version.
-5. Merge the MR. Members sync, download the new gallery template, and apply the
+5. Merge the pull request. Members sync, download the new gallery template, and apply the
    update locally.
 
 ## Lint-pin bump checklist
 
 - Select a protected immutable Virtual Worker tag or full commit SHA; never use `main`.
-- Update the `ref` in `.gitlab-ci.yml` and the `VW_LINT_REF` value used by the
-  included job.
+- Update `lint_ref` (and the `@ref` on the `uses:` line) in
+  `.github/workflows/lint.yml`.
 - Read the new tool README and confirm the pure-manifest API remains frozen.
 - Regenerate `docs/schema.md` with the pinned tool:
   `python -m lint docs ../../registry-scaffold/docs/schema.md` (from the tool directory).

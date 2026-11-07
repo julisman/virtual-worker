@@ -295,6 +295,7 @@ Upstream model server — llama.cpp / MLX / vLLM / Ollama / remote API`}</Pre>
       <P><Term>Sessions &amp; history:</Term> every turn auto-saves locally. Use <Term>+ New chat</Term> in the sidebar to start fresh; past conversations live on each agent's <Term>Conversations</Term> tab (open the agent → Conversations → click one to reopen). The title comes from your first message. Below each reply you'll see response time, tokens/sec, total tokens, and which tools ran.</P>
       <Tip>If a conversation exceeds the model's context window, Virtual Worker automatically starts a fresh session (the old one stays saved) and keeps your last message in the box so you can resend it.</Tip>
       <P>The active model is read-only here — switch it from <Term>Models</Term>. The badge polls every few seconds and updates on its own.</P>
+      <P><Term>Feedback</Term>: under every reply there is a thumbs up, a thumbs down and a pencil. Rate a reply or rewrite it into the answer you wanted. The signals are listed under <Term>Analytics → feedback</Term>, where you can review, delete, and export the up-rated and corrected turns as a chat-format JSONL file for fine-tuning with any trainer. Down-rated turns stay out of the export.</P>
     </>
   ),
   agents: (
