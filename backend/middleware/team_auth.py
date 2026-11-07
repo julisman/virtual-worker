@@ -57,6 +57,7 @@ _ROLE_POLICY: dict[str, str] = {
     "/api/hub": "admin",
     "/api/backup": "admin",
     "/api/harness": "admin",
+    "/api/eval": "admin",       # switches the active model
     "/api/registries": "admin",
     "/api/browser": "admin",
     "/api/mcp": "admin",

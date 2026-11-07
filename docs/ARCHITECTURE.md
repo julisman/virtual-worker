@@ -280,6 +280,23 @@ share the module: the `code_*` worker tools (`agent/harness_tools.py`, with a
 `/codex` channel commands (`harness/commands.py`, which post a finished job back
 into the originating chat through the channel manager), and `/api/harness`.
 
+
+## 5b. Evaluation suites (`storage/eval_store.py`, `runtime/eval_runner.py`)
+
+A suite is an ordered list of cases, each with a scorer: exact match, keyword
+rubric, tool call (the case carries tool schemas and the expected call), or an
+LLM judge (instructions plus an optional reference). A run executes one suite
+across several on-device models: the runner snapshots the active model,
+activates each candidate through `llama_manager`, waits for health, sends every
+case (times `repetitions`) through the local gateway so the debug capture sees
+the calls, scores the reply, samples the model server's resident memory, and
+records one result row per (model, case, repetition). The judge is the model
+under test or a BYOK provider through the normal egress. When the run ends the
+previous model is restored; "promote" is the explicit way to keep a winner.
+Progress streams over SSE, interrupted runs are marked at startup, and
+`/api/eval` carries suites (with import, export and "from feedback"), runs,
+leaderboard, per-case matrix and CSV/JSON export. The page is `features/evals`.
+
 ## 6. Trace capture
 
 `middleware/api_debug.py` is a pure-ASGI middleware that tees a bounded copy of

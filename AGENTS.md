@@ -103,6 +103,11 @@ inbound (browser / coding agents / later: chat channels)
   → runtime.llama_manager (managed model server) ─httpx─▶ upstream (:8080)
 ```
 
+- **Evaluation suites** (`storage/eval_store.py` + `runtime/eval_runner.py` +
+  `routes/eval.py`, PRD §8.14): suites of cases with four scorers (exact, rubric, tool,
+  judge); runs activate each model via `llama_manager` and restore the previous one;
+  the runner's `_activate/_wait_healthy/_chat_completion/_judge_completion/_rss_bytes/
+  _restore` are monkeypatch seams, so tests never load a model. Only one run at a time.
 - **Coding harnesses** (`harness/`, PRD §8.13): `base.py` holds the adapter contract,
   settings, the `Job` record and subprocess supervision; `claude_code.py` reads
   `~/.claude/sessions` (live registry) + `~/.claude/projects/*/*.jsonl` (transcripts) and

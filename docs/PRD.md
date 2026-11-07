@@ -370,6 +370,20 @@ The product is built around five ideas:
   result posted back into the same chat, and the HTTP API. Off per worker by default.
   _Implemented 2026-11-07._
 
+### 8.14 Evaluation suites (added 2026-11-07)
+
+- FR-E1. Reusable suites of cases with exact, keyword, tool-call and LLM-judge scoring;
+  starter cases per task type; JSON import and export; a version that bumps when cases
+  change and is recorded on every run.
+- FR-E2. Runs across several on-device models with safe activation and restore, options
+  for temperature, max tokens, repetitions and the judge; cancellable; a model that fails
+  to load fails its cases, not the run.
+- FR-E3. Leaderboard of quality, tool reliability, throughput, latency, peak memory and
+  errors; per-case side-by-side outputs with rationale; CSV and JSON export; promote the
+  winner to the active model.
+- FR-E4. A suite can be built from captured chat feedback, so real usage becomes the
+  benchmark. _Implemented 2026-11-07._
+
 ## 9. UX and surfaces
 
 **Web UI** (sidebar app, light and dark):
@@ -555,6 +569,7 @@ Checked requirement by requirement against the code on `main`.
 | 8.12 Trust, backup, packaging | Mostly done | Team mode hardened (still behind its flag, D6); security baseline; backup export/import and scheduled snapshots; dev launcher and service mode. Desktop build is a scaffold with no release pipeline |
 | 9 UX | Mostly done | Every listed surface exists except a Home screen (Chat is the landing tab) |
 | First-run experience | Done | Wizard: model, worker from a template, optional chat app |
+| 8.14 Evaluation suites | Done | Suites, multi-model runs, four scorers, leaderboard, drill-down, promote, from-feedback |
 | 8.13 Coding harness | Done | Claude Code and Codex sessions listed and driven from chat channels, worker tools and the API |
 | Later (deferred) | Not started | Fine-tuning from feedback, evaluation suites, voice, case management, hosted template index. Browser control, listed as later, is present |
 
