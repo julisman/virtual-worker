@@ -172,6 +172,8 @@ export interface Guardrails {
   compactKeep?: "messages" | "size";  // how the recap's verbatim tail is cut, both modes
   compactKeepAmount?: number;  // messages or tokens per compactKeep; 0 = auto
   maxOutputTokens?: number;  // per-turn output budget (thinking + answer); 0 = auto
+  channelSend?: boolean;     // may message people on connected chat channels (channel_send)
+  codingHarness?: boolean;   // may list and drive Claude Code sessions (code_* tools, /code)
 }
 
 const DEFAULT_GUARDRAILS: Guardrails = {
@@ -181,6 +183,7 @@ const DEFAULT_GUARDRAILS: Guardrails = {
   compression: "on", focusOutput: false, reasoning: "on",
   contextMode: "chars", reserveTokens: 0, contextTokens: 0, compactKeep: "messages", compactKeepAmount: 0,
   maxOutputTokens: 0,
+  channelSend: false, codingHarness: false,
 };
 
 interface Skill {
@@ -1078,6 +1081,24 @@ function AgentsPanel({
                         draft.guardrails.verify ? "border-primary bg-primary text-white" : "border-pressed bg-canvas text-mute hover:border-primary-line hover:text-ink"
                       }`}>{draft.guardrails.verify ? "On" : "Off"}</button>
                   </div>
+                  <Field label="Integrations" hint="Capabilities that reach outside the worker's own sandbox. Both are off by default.">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between rounded-xl border border-pressed bg-canvas px-3 py-2.5">
+                        <span className="text-xs font-medium text-body">Message people on chat channels (channel_send)</span>
+                        <button onClick={() => patch({ guardrails: { ...draft.guardrails, channelSend: !draft.guardrails.channelSend } })}
+                          className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                            draft.guardrails.channelSend ? "border-primary bg-primary text-white" : "border-pressed bg-canvas text-mute hover:border-primary-line hover:text-ink"
+                          }`}>{draft.guardrails.channelSend ? "On" : "Off"}</button>
+                      </div>
+                      <div className="flex items-center justify-between rounded-xl border border-pressed bg-canvas px-3 py-2.5">
+                        <span className="text-xs font-medium text-body">Coding harness: see and drive Claude Code sessions (code_* tools, /code)</span>
+                        <button onClick={() => patch({ guardrails: { ...draft.guardrails, codingHarness: !draft.guardrails.codingHarness } })}
+                          className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                            draft.guardrails.codingHarness ? "border-primary bg-primary text-white" : "border-pressed bg-canvas text-mute hover:border-primary-line hover:text-ink"
+                          }`}>{draft.guardrails.codingHarness ? "On" : "Off"}</button>
+                      </div>
+                    </div>
+                  </Field>
                   <Field label="Step checklist" hint="For multi-step work the agent posts a step plan, shown live by chat surfaces that render it (progress card. Best on API-provider models; small local models may over-use it.">
                     <div className="flex items-center justify-between rounded-xl border border-pressed bg-canvas px-3 py-2.5">
                       <span className="text-xs font-medium text-body">Post a live step plan</span>

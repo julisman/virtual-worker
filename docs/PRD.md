@@ -358,6 +358,18 @@ The product is built around five ideas:
   a desktop app build (frozen backend plus UI) as a later milestone.
   _Desktop build scaffold present under `desktop/` (2026-11-07); no release pipeline or signed builds yet._
 
+### 8.13 Coding harness (added 2026-11-07)
+
+- FR-H1. List the Claude Code and Codex sessions on the machine with status, project, title
+  and last activity, read from each tool's own on-disk state; no daemon. Harnesses are
+  adapters behind one contract so another coding agent can be added without core changes.
+- FR-H2. Send a prompt into an existing session or a new one in an allowed directory as a
+  supervised headless run; stream progress; report the answer, turns and cost. A session
+  open in a terminal is forked, never written to.
+- FR-H3. Reachable three ways: worker tools, `/code` commands on any chat channel with the
+  result posted back into the same chat, and the HTTP API. Off per worker by default.
+  _Implemented 2026-11-07._
+
 ## 9. UX and surfaces
 
 **Web UI** (sidebar app, light and dark):
@@ -543,6 +555,7 @@ Checked requirement by requirement against the code on `main`.
 | 8.12 Trust, backup, packaging | Mostly done | Team mode hardened (still behind its flag, D6); security baseline; backup export/import and scheduled snapshots; dev launcher and service mode. Desktop build is a scaffold with no release pipeline |
 | 9 UX | Mostly done | Every listed surface exists except a Home screen (Chat is the landing tab) |
 | First-run experience | Done | Wizard: model, worker from a template, optional chat app |
+| 8.13 Coding harness | Done | Claude Code and Codex sessions listed and driven from chat channels, worker tools and the API |
 | Later (deferred) | Not started | Fine-tuning from feedback, evaluation suites, voice, case management, hosted template index. Browser control, listed as later, is present |
 
 Open items that need a person rather than code: the copyright holder line in

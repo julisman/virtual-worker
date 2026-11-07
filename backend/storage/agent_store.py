@@ -59,6 +59,7 @@ DEFAULT_GUARDRAILS = {
     "compactKeep": "messages",  # "messages" (default) | "size" — recap tail cut
     "compactKeepAmount": 0,  # messages or tokens per compactKeep; 0 = auto
     "channelSend": False,   # may message people on connected chat channels (channel_send)
+    "codingHarness": False,  # may list and drive Claude Code sessions on this machine (code_*)
 }
 
 
@@ -117,6 +118,7 @@ def _guardrails(raw) -> dict:
     g["wikiReadChars"] = max(1000, min(int(g.get("wikiReadChars") or 8000), 200000))
     g["skillFactory"] = bool(g.get("skillFactory"))
     g["channelSend"] = bool(g.get("channelSend"))
+    g["codingHarness"] = bool(g.get("codingHarness"))
     # PRD-23: context mode + window-mode knobs. Bogus values fall back to the
     # defaults, like the fields above.
     g["contextMode"] = g.get("contextMode") if g.get("contextMode") in ("chars", "window") else "chars"

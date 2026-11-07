@@ -343,6 +343,13 @@ AUDIT_RETENTION_DAYS = int(os.environ.get("VW_AUDIT_RETENTION_DAYS", "365"))    
 CHAT_EVENT_RETENTION_DAYS = int(os.environ.get("VW_CHAT_EVENT_RETENTION_DAYS", "7"))      # channel dedup ids
 CHANNEL_MEDIA_RETENTION_DAYS = int(os.environ.get("VW_CHANNEL_MEDIA_RETENTION_DAYS", "14"))  # received files
 MAINTENANCE_INTERVAL_S = int(os.environ.get("VW_MAINTENANCE_INTERVAL_S", "3600"))
+
+# Coding harness (Claude Code on this machine): where its sessions live and
+# which binary to run. Both are overridable for tests and unusual installs.
+CLAUDE_HOME = Path(os.environ.get("VW_CLAUDE_HOME") or os.path.expanduser("~/.claude"))
+CLAUDE_BIN = os.environ.get("VW_CLAUDE_BIN", "")
+CODEX_HOME = Path(os.environ.get("VW_CODEX_HOME") or os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"))
+CODEX_BIN = os.environ.get("VW_CODEX_BIN", "")
 # Aliases used by the channel/maintenance code.
 TRACE_RETENTION_DAYS = DEBUG_RETENTION_DAYS
 TRACE_MAX_RUNS = DEBUG_MAX_ROWS

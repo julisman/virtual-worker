@@ -342,14 +342,27 @@ class ChannelManager:
             return
         if cmd == "/help":
             await self._send(acct["id"], msg.conversation_id,
-                             "Commands: /reset (start over), /status, /help. "
-                             "Otherwise just write to me.", reply_to=msg.event_id, source="command")
+                             "Commands: /reset (start over), /status, /help"
+                             + (", /code (Claude Code), /codex (Codex)" if ((agent or {}).get("guardrails") or {}).get("codingHarness") else "")
+                             + ". Otherwise just write to me.", reply_to=msg.event_id, source="command")
             return
         if agent is None:
             await self._send(acct["id"], msg.conversation_id,
                              "No agent is bound to this chat yet.", reply_to=msg.event_id,
                              source="policy")
             return
+        if cmd.startswith("/code"):
+            # Deterministic Claude Code commands; results of long runs flow back here.
+            from harness import commands as harness_commands
+            reply = await harness_commands.handle(
+                msg.text or "", agent=agent,
+                origin={"accountId": acct["id"], "conversationId": msg.conversation_id,
+                        "agentId": agent.get("id"), "sessionKey": session_id, "kind": acct["kind"],
+                        "source": "command"})
+            if reply is not None:
+                await self._send(acct["id"], msg.conversation_id, reply, reply_to=msg.event_id,
+                                 source="command", agent_id=agent.get("id"))
+                return
 
         adapter = self._adapters.get(acct["id"])
         user_text = self._user_text(msg)

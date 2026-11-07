@@ -21,7 +21,8 @@ virtual-worker/
 │   ├── agent/          # the agent harness — runner.stream_run() → compose() → loop.run(); tools, worker,
 │   │                   #   scheduler, triggers, inbox (flow-back), crusher (context compression), wiki,
 │   │                   #   browser_control, skill_factory, team, vision_helper, doc_tools, …
-│   ├── channels/       # chat-channel plugins: base contract, manager, whatsapp/ (+ Node bridge), telegram, discord, slack, discord, slack
+│   ├── channels/       # chat-channel plugins: base contract, manager, whatsapp/ (+ Node bridge), telegram, discord, slack
+│   ├── harness/        # coding harnesses: base.py (jobs, settings), claude_code.py, codex.py, commands.py (/code, /codex)
 │   ├── vw_cli.py       # `./vw` service mode: detached supervisor, auto-restart, built UI
 │   ├── runtime/        # managed model server + engine management
 │   ├── gateway/        # protocol translators (Anthropic / Responses / Gemini) + providers.py /
@@ -102,6 +103,16 @@ inbound (browser / coding agents / later: chat channels)
   → runtime.llama_manager (managed model server) ─httpx─▶ upstream (:8080)
 ```
 
+- **Coding harnesses** (`harness/`, PRD §8.13): `base.py` holds the adapter contract,
+  settings, the `Job` record and subprocess supervision; `claude_code.py` reads
+  `~/.claude/sessions` (live registry) + `~/.claude/projects/*/*.jsonl` (transcripts) and
+  runs `claude -p --output-format stream-json` (a live session is `--fork-session`ed);
+  `codex.py` reads `~/.codex/sessions/**/rollout-*.jsonl` and runs `codex exec --json`
+  (result via `-o`). Surfaces: `agent/harness_tools.py` (`code_*` with a `harness` arg,
+  gated by `guardrails.codingHarness`), `harness/commands.py` (`/code`, `/codex`; results
+  flow back via `manager.send`), `routes/harness.py`, Settings card. New sessions only
+  under `allowedRoots`. `VW_CLAUDE_HOME/BIN`, `VW_CODEX_HOME/BIN` override paths. To add a
+  harness: implement the `Adapter` protocol, `base.register()` it, import it in commands.
 - **Document tools** (`agent/doc_tools.py`): `document_read` / `document_info` for PDF
   (pypdf), docx/xlsx/pptx (stdlib zip + xml), CSV and text. Always composed; paths must be
   under the working folder or `<VW_HOME>/channels` (where chat attachments land). Output
