@@ -216,6 +216,9 @@ cd frontend && npm run build                       # tsc --noEmit && vite build
   `monkeypatch.setattr(config, "APP_HOME", tmp_path)` (see `tests/test_scheduler.py`).
 - Make tests hermetic: monkeypatch model activation / chat completion / embeddings so
   no real model is loaded.
+- For a real end-to-end check with a local model (activation → chat tool call → board
+  worker → channel webhook turn), run `scripts/smoke_live.py` against a started service
+  (usage in its docstring). It is not part of CI.
 
 ## Where to read more
 

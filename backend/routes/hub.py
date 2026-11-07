@@ -515,7 +515,7 @@ def _scan_fused_models() -> list[dict]:
             items.append({
                 "source": "finetuned",
                 "backend": "llamacpp",
-                "repo": f"ves/{d.stem}",
+                "repo": f"local/{d.stem}",
                 "filename": d.name,
                 "path": str(d),
                 "sizeBytes": size,
@@ -540,9 +540,9 @@ def _scan_fused_models() -> list[dict]:
         items.append({
             "source": "finetuned",
             "backend": "mlx",
-            # Locally fine-tuned models live under the "ves/" author namespace —
+            # Locally fine-tuned models live under the "local/" author namespace —
             # they were produced by this studio, not downloaded from a HF org.
-            "repo": f"ves/{d.name}",
+            "repo": f"local/{d.name}",
             "filename": d.name,
             "path": str(d),
             "sizeBytes": size or None,

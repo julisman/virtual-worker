@@ -25,7 +25,7 @@ def test_scan_finds_fused_models(tmp_path, monkeypatch):
     assert len(items) == 1
     m = items[0]
     assert m["source"] == "finetuned" and m["backend"] == "mlx"
-    assert m["repo"] == "ves/Qwythos-ft-abc123"   # ves/ author namespace
+    assert m["repo"] == "local/Qwythos-ft-abc123"   # local/ author namespace
     assert m["path"].endswith("Qwythos-ft-abc123")
     assert m["sizeBytes"] == 2048
 
@@ -56,7 +56,7 @@ def test_scan_finds_loose_gguf(tmp_path, monkeypatch):
     assert len(items) == 1
     m = items[0]
     assert m["source"] == "finetuned" and m["backend"] == "llamacpp"
-    assert m["repo"] == "ves/nano-LocalFT-1B-v2-F16"
+    assert m["repo"] == "local/nano-LocalFT-1B-v2-F16"
     assert m["filename"] == "nano-LocalFT-1B-v2-F16.gguf"
     assert m["sizeBytes"] == 4096
 
