@@ -210,18 +210,33 @@ open until the first token is minted, then a valid token is required.
 - **Commits**: conventional — `feat:`, `fix:`, `chore:`, `docs:`, with an optional
   scope such as `feat(channels):`.
 
-## Workflow — branch + PR
+## Workflow — one worktree per feature, PRs always against `main`
 
-- **Never push directly to `main`.** Create a feature branch, commit, push, open a PR,
-  merge after review.
+- **Never push directly to `main`.** Every feature or fix starts in its **own git
+  worktree** on a branch cut from `main`, so the main checkout stays clean and several
+  features can be worked on side by side without switching branches:
   ```bash
-  git checkout -b feat/<scope>-<desc>
-  # … work …
+  git fetch origin
+  git worktree add ../vw-wt-<slug> -b feat/<scope>-<desc> origin/main
+  cd ../vw-wt-<slug>
+  # … work, commit …
   git push -u origin feat/<scope>-<desc>
   gh pr create --base main --title "feat: …" --body "…"
   ```
-- For parallel work, use a **git worktree**
-  (`git worktree add ../vw-wt-<slug> -b <branch> main`).
+  After the PR is merged: `git worktree remove ../vw-wt-<slug>` and
+  `git branch -d feat/<scope>-<desc>`.
+- **PRs target `main`, never another feature branch.** Do not stack PRs. If a second
+  feature needs the first one, wait for the first to merge, then rebase or merge
+  `origin/main` into the second worktree and resolve conflicts there. (A PR based on a
+  feature branch is merged *into that branch* when the base merges first, and `main`
+  never receives it.)
+- Each worktree has its own `backend/.venv` and `frontend/node_modules`: run
+  `./setup.sh` once in a new worktree, or symlink them from the main checkout
+  (`ln -s ../../virtual-worker/backend/.venv backend/.venv`) when dependencies are
+  unchanged. Use a distinct `VW_HOME` (or the default `./data`, which is per worktree)
+  so two worktrees never share a database.
+- Keep every PR complete: tests, docs (in-app Docs, README, ARCHITECTURE when the
+  architecture changes), and a CHANGELOG entry under `[Unreleased]`.
 
 ## Testing — gate every change
 
