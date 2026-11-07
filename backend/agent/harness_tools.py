@@ -32,18 +32,18 @@ def make_harness_tools(agent_id: str) -> dict[str, dict]:
             ad = base.get(harness)
         except base.HarnessError as exc:
             return f"error: {exc}"
-        return base.render_sessions(ad.list_sessions(limit=max(1, min(int(limit or 10), 30)), project=project or None),
-                                    ad.label, "/code" if ad.key == "claude" else "/codex")
+        sessions = await base.run_sync(ad.list_sessions, limit=max(1, min(int(limit or 10), 30)), project=project or None)
+        return base.render_sessions(sessions, ad.label, "/code" if ad.key == "claude" else "/codex")
 
     async def code_session(session: str = "", turns: int = 6, harness: str = "claude") -> str:
         try:
             ad = base.get(harness)
         except base.HarnessError as exc:
             return f"error: {exc}"
-        s = ad.resolve_session(session)
+        s = await base.run_sync(ad.resolve_session, session)
         if not s:
             return f"no {ad.label} session matches {session!r}; call code_sessions first"
-        d = ad.session_detail(s["id"], turns=max(0, min(int(turns or 6), 20)))
+        d = await base.run_sync(ad.session_detail, s["id"], turns=max(0, min(int(turns or 6), 20)))
         return base.render_detail(d) if d else "session not found"
 
     async def code_run(prompt: str = "", session: str = "", project: str = "", harness: str = "claude") -> str:
@@ -61,17 +61,18 @@ def make_harness_tools(agent_id: str) -> dict[str, dict]:
         return f"started {ad.label} job {job.id} on {where}.{tail}"
 
     async def code_jobs(job: str = "") -> str:
+        scope = _origin(agent_id)                     # a chat sees its own runs; the worker its own
         if job:
-            j = base.get_job(job)
-            return base.render_job(j) if j else f"no job {job!r}"
-        jobs = base.list_jobs(limit=10)
-        if not jobs:
-            return "no runs yet"
-        return "\n".join(f"{j['id']} · {j['harness']} · {j['status']} · {j['toolCalls']} tool calls · {base.short(j['prompt'], 80)}" for j in jobs)
+            j = base.get_job(job, scope=scope)
+            return base.render_job(j) if j else f"no job {job!r} started from here"
+        jobs = base.list_jobs(limit=10, scope=scope)
+        return base.render_jobs(jobs) if jobs else "no runs started from here yet"
 
     async def code_stop(job: str = "") -> str:
-        j = await base.stop(job)
-        return f"job {j.id} {j.status}" if j else f"no job {job!r}"
+        if not (job or "").strip():
+            return "code_stop needs a job id"
+        j = await base.stop(job, scope=_origin(agent_id))
+        return f"job {j.id} {j.status}" if j else f"no job {job!r} started from here"
 
     return {
         "code_sessions": {"fn": code_sessions, "schema": {"type": "function", "function": {

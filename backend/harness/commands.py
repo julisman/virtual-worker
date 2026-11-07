@@ -86,12 +86,12 @@ async def handle(text: str, *, origin: dict, agent: dict | None) -> str | None:
         if sub in ("help", "?", ""):
             return help_text(cmd, ad.label)
         if sub in ("list", "ls", "sessions"):
-            return base.render_sessions(ad.list_sessions(limit=8), ad.label, cmd)
+            return base.render_sessions(await base.run_sync(ad.list_sessions, limit=8), ad.label, cmd)
         if sub in ("show", "status", "see"):
-            s = ad.resolve_session(arg)
+            s = await base.run_sync(ad.resolve_session, arg)
             if not s:
                 return f"No {ad.label} session matches {arg!r}. Try {cmd} list."
-            d = ad.session_detail(s["id"], turns=4)
+            d = await base.run_sync(ad.session_detail, s["id"], turns=4)
             return base.render_detail(d) if d else "Session not found."
         if sub in ("run", "ask", "send", "resume"):
             ref, _, prompt = arg.partition(" ")
@@ -107,16 +107,18 @@ async def handle(text: str, *, origin: dict, agent: dict | None) -> str | None:
             job = await base.start_job(ad, prompt.strip(), project=proj, origin=origin, on_done=deliver_to(origin))
             return f"Started {ad.label} job {job.id} in {job.cwd}. I'll post the result here when it finishes."
         if sub == "jobs":
-            jobs = base.list_jobs(limit=10)
+            jobs = base.list_jobs(limit=10, scope=origin)       # only this chat's runs
             if not jobs:
-                return f"No runs yet. Start one with {cmd} run <ref> <prompt>."
-            return "\n".join(f"{j['id']} · {j['harness']} · {j['status']} · {j['toolCalls']} tool calls · {base.short(j['prompt'], 80)}" for j in jobs)
+                return f"No runs from this chat yet. Start one with {cmd} run <ref> <prompt>."
+            return base.render_jobs(jobs)
         if sub == "job":
-            job = base.get_job(arg)
-            return base.render_job(job) if job else f"No job {arg!r}."
+            job = base.get_job(arg, scope=origin)
+            return base.render_job(job) if job else f"No job {arg!r} from this chat."
         if sub in ("stop", "kill", "cancel"):
-            job = await base.stop(arg)
-            return f"Job {job.id} {job.status}." if job else f"No job {arg!r}."
+            if not arg:
+                return f"Usage: {cmd} stop <job id>"
+            job = await base.stop(arg, scope=origin)
+            return f"Job {job.id} {job.status}." if job else f"No job {arg!r} from this chat."
         return f"Unknown {cmd} command {sub!r}.\n{help_text(cmd, ad.label)}"
     except base.HarnessError as exc:
         return f"Can't do that: {exc}"

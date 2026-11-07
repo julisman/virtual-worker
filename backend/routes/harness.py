@@ -11,6 +11,8 @@
   POST /api/harness/jobs/{id}/stop
 """
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -49,8 +51,9 @@ def _adapter(key: str | None):
 
 @router.get("/status")
 async def status():
+    avail = await asyncio.gather(*(base.run_sync(ad.availability) for ad in base.adapters()))
     return {
-        "harnesses": {ad.key: {"label": ad.label, **ad.availability()} for ad in base.adapters()},
+        "harnesses": {ad.key: {"label": ad.label, **a} for ad, a in zip(base.adapters(), avail)},
         "settings": base.get_settings(),
         "running": sum(1 for j in base.JOBS.values() if j.status == "running"),
     }
@@ -72,14 +75,15 @@ async def put_settings(body: SettingsIn):
 @router.get("/sessions")
 async def sessions(harness: str = "claude", limit: int = 20, project: str | None = None):
     ad = _adapter(harness)
-    return {"harness": ad.key, "sessions": ad.list_sessions(limit=max(1, min(limit, 100)), project=project)}
+    sessions = await base.run_sync(ad.list_sessions, limit=max(1, min(limit, 100)), project=project)
+    return {"harness": ad.key, "sessions": sessions}
 
 
 @router.get("/sessions/{session_id}")
 async def session(session_id: str, harness: str = "claude", turns: int = 8):
     ad = _adapter(harness)
-    s = ad.resolve_session(session_id)
-    d = ad.session_detail(s["id"], turns=max(0, min(turns, 40))) if s else None
+    s = await base.run_sync(ad.resolve_session, session_id)
+    d = await base.run_sync(ad.session_detail, s["id"], turns=max(0, min(turns, 40))) if s else None
     if not d:
         raise HTTPException(404, "no such session")
     return d

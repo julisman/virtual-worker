@@ -343,7 +343,7 @@ class ChannelManager:
         if cmd == "/help":
             await self._send(acct["id"], msg.conversation_id,
                              "Commands: /reset (start over), /status, /help"
-                             + (", /code (Claude Code sessions)" if ((agent or {}).get("guardrails") or {}).get("codingHarness") else "")
+                             + (", /code (Claude Code), /codex (Codex)" if ((agent or {}).get("guardrails") or {}).get("codingHarness") else "")
                              + ". Otherwise just write to me.", reply_to=msg.event_id, source="command")
             return
         if agent is None:

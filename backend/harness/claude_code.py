@@ -21,8 +21,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,26 +48,9 @@ def claude_bin() -> str | None:
     return shutil.which("claude")
 
 
-_version_cache: dict = {"bin": None, "version": None, "at": 0.0}
-
-
 def availability() -> dict:
     """Whether Claude Code is runnable, with its version (cached a minute)."""
-    b = claude_bin()
-    if not b:
-        return {"available": False, "bin": None, "version": None,
-                "error": "claude binary not found; install Claude Code or set the path in Settings"}
-    now = time.time()
-    if _version_cache["bin"] == b and now - _version_cache["at"] < 60:
-        return {"available": True, "bin": b, "version": _version_cache["version"], "error": None}
-    try:
-        out = subprocess.run([b, "--version"], capture_output=True, text=True, timeout=20)
-        txt = (out.stdout or out.stderr).strip()
-        ver = txt.splitlines()[0] if txt else "unknown"
-    except Exception as exc:  # noqa: BLE001
-        return {"available": False, "bin": b, "version": None, "error": f"claude --version failed: {exc}"}
-    _version_cache.update(bin=b, version=ver, at=now)
-    return {"available": True, "bin": b, "version": ver, "error": None}
+    return base.probe_version(claude_bin(), LABEL)
 
 
 # --------------------------------------------------------------------------- #
@@ -253,22 +234,41 @@ def list_sessions(limit: int = 20, project: str | None = None) -> list[dict]:
             out.append({"id": sid, "harness": KEY, "title": l["name"] or "(new)", "project": l["cwd"], "live": True,
                         "status": l["status"], "name": l["name"], "pid": l["pid"],
                         "lastActivity": l["updatedAt"], "lastPrompt": "", "lastAssistant": "", "messages": 0})
-    out.sort(key=lambda s: s.get("lastActivity") or "", reverse=True)
-    out.sort(key=lambda s: not s["live"])
-    return out[:limit]
+    return base.rank_sessions(out)[:limit]
+
+
+def _row_for(sid: str, p: Path | None, live: dict | None) -> dict:
+    info = scan_transcript(p) if p else {}
+    return {
+        "id": sid, "harness": KEY,
+        "title": info.get("title") or _short(info.get("lastPrompt") or "", 60) or (live or {}).get("name") or "(untitled)",
+        "project": (live or {}).get("cwd") or info.get("cwd") or "",
+        "live": bool(live), "status": (live or {}).get("status") or "stopped",
+        "name": (live or {}).get("name") or "", "pid": (live or {}).get("pid"),
+        "lastActivity": info.get("lastTs") or (live or {}).get("updatedAt"),
+        "lastPrompt": _short(info.get("lastPrompt") or ""), "lastAssistant": _short(info.get("lastAssistant") or ""),
+        "messages": info.get("messages", 0),
+    }
 
 
 def resolve_session(ref: str) -> dict | None:
-    """Find a session by full id, id prefix, or live name (or part of it)."""
+    """Find a session by full id, id prefix, or live name (or part of it),
+    without scanning every transcript: the live registry is tiny and an id
+    prefix maps to a file glob."""
     ref = (ref or "").strip()
-    if not ref:
+    if not ref or "/" in ref:
         return None
-    sessions = list_sessions(limit=200)
-    for s in sessions:
-        if s["id"] == ref or (s["name"] and s["name"] == ref):
-            return s
-    cands = [s for s in sessions if s["id"].startswith(ref) or (s["name"] and ref.lower() in s["name"].lower())]
-    return cands[0] if len(cands) == 1 else None
+    live = {s["id"]: s for s in live_sessions() if s["id"]}
+    hit = base.resolve_by_prefix(list(live.values()), ref)
+    if hit:
+        return _row_for(hit["id"], _transcript_path(hit["id"]), hit)
+    root = _home() / "projects"
+    files = list(root.glob(f"*/{ref}*.jsonl")) if root.is_dir() else []
+    ids = {f.stem for f in files}
+    if len(ids) == 1:
+        sid = ids.pop()
+        return _row_for(sid, next(f for f in files if f.stem == sid), live.get(sid))
+    return None
 
 
 def session_detail(session_id: str, turns: int = 6) -> dict | None:
@@ -298,6 +298,7 @@ def session_detail(session_id: str, turns: int = 6) -> dict | None:
 class _Adapter:
     key = KEY
     label = LABEL
+    supports_fork = True
 
     def availability(self) -> dict:
         return availability()
@@ -316,7 +317,7 @@ class _Adapter:
         b = claude_bin()
         if not b:
             raise HarnessError("claude binary not found; install Claude Code or set the path in Settings → Coding harness")
-        argv = [b, "-p", job.prompt, "--output-format", "stream-json", "--verbose"]
+        argv = [b, "-p", "--output-format", "stream-json", "--verbose"]
         if job.session_id:
             argv += ["--resume", job.session_id]
             if job.forked:
@@ -327,7 +328,8 @@ class _Adapter:
             argv += ["--max-turns", str(int(cfg["maxTurns"]))]
         if cfg.get("model"):
             argv += ["--model", cfg["model"]]
-        return argv
+        # "--" ends option parsing: a prompt that starts with "-" is text, never a flag.
+        return argv + ["--", job.prompt]
 
     def consume(self, job: Job, rec: dict) -> None:
         t = rec.get("type")

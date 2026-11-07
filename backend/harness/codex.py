@@ -22,9 +22,7 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 import config
@@ -48,25 +46,8 @@ def codex_bin() -> str | None:
     return shutil.which("codex")
 
 
-_version_cache: dict = {"bin": None, "version": None, "at": 0.0}
-
-
 def availability() -> dict:
-    b = codex_bin()
-    if not b:
-        return {"available": False, "bin": None, "version": None,
-                "error": "codex binary not found; install the Codex CLI or set the path in Settings"}
-    now = time.time()
-    if _version_cache["bin"] == b and now - _version_cache["at"] < 60:
-        return {"available": True, "bin": b, "version": _version_cache["version"], "error": None}
-    try:
-        out = subprocess.run([b, "--version"], capture_output=True, text=True, timeout=20)
-        txt = (out.stdout or out.stderr).strip()
-        ver = txt.splitlines()[0] if txt else "unknown"
-    except Exception as exc:  # noqa: BLE001
-        return {"available": False, "bin": b, "version": None, "error": f"codex --version failed: {exc}"}
-    _version_cache.update(bin=b, version=ver, at=now)
-    return {"available": True, "bin": b, "version": ver, "error": None}
+    return base.probe_version(codex_bin(), LABEL)
 
 
 # --------------------------------------------------------------------------- #
@@ -126,8 +107,7 @@ def _scan(path: Path) -> dict:
     except OSError:
         return {}
     if not info["id"]:
-        stem = path.stem
-        info["id"] = stem.split("-", 4)[-1] if stem.startswith("rollout-") and stem.count("-") >= 4 else stem
+        info["id"] = _id_of(path)
     _scan_cache[key] = (mtime, dict(info))
     if len(_scan_cache) > 200:
         _scan_cache.pop(next(iter(_scan_cache)))
@@ -167,28 +147,34 @@ def list_sessions(limit: int = 20, project: str | None = None) -> list[dict]:
             continue
         out.append(_row(info))
         seen.add(info["id"])
-    out.sort(key=lambda s: s.get("lastActivity") or "", reverse=True)
-    out.sort(key=lambda s: not s["live"])
-    return out[:limit]
+    return base.rank_sessions(out)[:limit]
 
 
-def _find(session_id: str) -> Path | None:
-    for p in _rollouts():
+def _find(session_id: str, rollouts: list[Path] | None = None) -> Path | None:
+    for p in rollouts if rollouts is not None else _rollouts():
         if p.stem.endswith(session_id):
             return p
     return None
 
 
 def resolve_session(ref: str) -> dict | None:
+    """Match an id or id prefix against rollout file names (no parsing)."""
     ref = (ref or "").strip()
-    if not ref:
+    if not ref or "/" in ref:
         return None
-    sessions = list_sessions(limit=200)
-    for s in sessions:
-        if s["id"] == ref:
-            return s
-    cands = [s for s in sessions if s["id"].startswith(ref)]
-    return cands[0] if len(cands) == 1 else None
+    rollouts = _rollouts()
+    hits = [p for p in rollouts if p.stem.rsplit("-", 5)[-5:] and _id_of(p).startswith(ref)]
+    ids = {_id_of(p) for p in hits}
+    if len(ids) != 1:
+        return None
+    return _row(_scan(hits[0]))
+
+
+def _id_of(p: Path) -> str:
+    stem = p.stem
+    # rollout-<YYYY-MM-DDTHH-MM-SS>-<uuid>: the uuid is the last five dash-separated parts
+    parts = stem.split("-")
+    return "-".join(parts[-5:]) if len(parts) >= 6 else stem
 
 
 def session_detail(session_id: str, turns: int = 6) -> dict | None:
@@ -209,6 +195,7 @@ def session_detail(session_id: str, turns: int = 6) -> dict | None:
 class _Adapter:
     key = KEY
     label = LABEL
+    supports_fork = False     # no --fork-session equivalent; busy sessions are refused instead
 
     def availability(self) -> dict:
         return availability()
@@ -234,10 +221,11 @@ class _Adapter:
         common = ["--json", "--skip-git-repo-check", "-o", out]
         if cfg.get("codexModel"):
             common += ["-m", cfg["codexModel"]]
+        # "--" ends option parsing so a prompt starting with "-" is text, never a flag.
         if job.session_id:
             # `exec resume` has no -s/-C; the sandbox comes through a config override.
-            return [b, "exec", "resume", job.session_id, job.prompt, *common, "-c", f'sandbox_mode="{sandbox}"']
-        return [b, "exec", *common, "-s", sandbox, "-C", job.cwd, job.prompt]
+            return [b, "exec", "resume", *common, "-c", f'sandbox_mode="{sandbox}"', job.session_id, "--", job.prompt]
+        return [b, "exec", *common, "-s", sandbox, "-C", job.cwd, "--", job.prompt]
 
     def consume(self, job: Job, rec: dict) -> None:
         t = rec.get("type")

@@ -20,7 +20,8 @@ FAKE_CLAUDE = textwrap.dedent('''\
     args = sys.argv[1:]
     if args == ["--version"]:
         print("9.9.9 (Claude Code fake)"); sys.exit(0)
-    prompt = args[args.index("-p") + 1]
+    assert "-p" in args and args.index("--") > 0
+    prompt = args[args.index("--") + 1]
     resume = args[args.index("--resume") + 1] if "--resume" in args else None
     forked = "--fork-session" in args
     sid = "f0rked-session" if forked else (resume or "new-session-1234")
@@ -28,6 +29,8 @@ FAKE_CLAUDE = textwrap.dedent('''\
     emit({"type": "system", "subtype": "init", "session_id": sid, "cwd": os.getcwd(), "model": "fake"})
     if prompt == "slow":
         time.sleep(30)
+    if prompt == "big":
+        emit({"type": "user", "message": {"content": [{"type": "tool_result", "content": "x" * 300000}]}})
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "Looking..."},
           {"type": "tool_use", "name": "Read", "input": {"file_path": "README.md"}}]}})
     if prompt == "fail":
@@ -52,7 +55,7 @@ def home(tmp_path, monkeypatch):
     fake.write_text(FAKE_CLAUDE)
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setattr(config, "CLAUDE_BIN", str(fake))
-    cc._version_cache.update(bin=None, version=None, at=0.0)
+    base.forget_version()
     cc.JOBS.clear()
     proj = tmp_path / "proj"; proj.mkdir()
     (chome / "sessions").mkdir(parents=True)
@@ -291,13 +294,16 @@ FAKE_CODEX = textwrap.dedent('''\
         print("codex-cli 9.9.9"); sys.exit(0)
     assert args[0] == "exec"
     resume = args[1] == "resume"
-    sid = args[2] if resume else "new-codex-thread"
-    prompt = args[3] if resume else args[-1]
+    dd = args.index("--")
+    sid = args[dd - 1] if resume else "new-codex-thread"
+    prompt = args[dd + 1]
     out = args[args.index("-o") + 1]
     def emit(d): print(json.dumps(d), flush=True)
     emit({"type": "thread.started", "thread_id": sid})
     emit({"type": "turn.started"})
     emit({"type": "item.completed", "item": {"type": "command_execution", "command": "ls -la"}})
+    if prompt == "slow":
+        import time; time.sleep(30)
     if prompt == "fail":
         emit({"type": "turn.failed", "error": {"message": "sign in again"}}); sys.exit(1)
     emit({"type": "item.completed", "item": {"type": "agent_message", "text": f"codex did: {prompt}"}})
@@ -315,7 +321,7 @@ def codex_home(home, tmp_path, monkeypatch):
     fake.write_text(FAKE_CODEX)
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setattr(config, "CODEX_BIN", str(fake))
-    codex._version_cache.update(bin=None, version=None, at=0.0)
+    base.forget_version()
     day = chome / "sessions" / "2026" / "11" / "07"
     _jsonl(day / "rollout-2026-11-07T01-00-00-0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl", [
         {"timestamp": "2026-11-07T01:00:00Z", "type": "session_meta", "payload": {"id": "0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "cwd": str(home["proj"]), "timestamp": "2026-11-07T01:00:00Z"}},
@@ -393,3 +399,86 @@ def test_codex_commands_and_routes(codex_home, home, monkeypatch):
         assert c.put("/api/harness/settings", json={"codexSandbox": "read-only"}).json()["codexSandbox"] == "read-only"
         r = c.post("/api/harness/run", json={"prompt": "x", "session": "0199aa", "harness": "codex"})
         assert r.status_code == 200 and r.json()["harness"] == "codex"
+
+
+# ─── Review-pass regressions ───────────────────────────────────────────────────
+
+def test_prompt_starting_with_dash_is_text_not_a_flag(home):
+    async def main():
+        job = await cc.start("--dangerously-skip-permissions please", session="old-33")
+        await asyncio.wait_for(job.task, 10)
+        assert job.status == "done" and job.result == "done: --dangerously-skip-permissions please in proj"
+        argv = cc.ADAPTER.argv(job)
+        assert argv[-2] == "--" and argv[-1].startswith("--dangerously")
+    asyncio.run(main())
+
+
+def test_large_event_lines_do_not_kill_the_run(home):
+    async def main():
+        job = await cc.start("big", session="old-33")
+        await asyncio.wait_for(job.task, 10)
+        assert job.status == "done" and job.result == "done: big in proj"
+    asyncio.run(main())
+
+
+def test_second_run_on_busy_session_is_refused(home, codex_home):
+    async def main():
+        job = await cc.start("slow", session="old-33")
+        with pytest.raises(cc.HarnessError, match="already in progress"):
+            await cc.start("again", session="old-33")
+        await cc.stop(job.id)
+        # Codex cannot fork: a session marked live (a run from here) is refused, never double-written
+        job = await codex.start("slow", session="0199aa")
+        with pytest.raises(base.HarnessError, match="already in progress"):
+            await codex.start("again", session="0199aa")
+        await base.stop(job.id)
+        assert not job.forked
+    asyncio.run(main())
+
+
+def test_empty_job_id_never_matches(home):
+    async def main():
+        job = await cc.start("slow", session="old-33")
+        assert base.get_job("") is None and base.get_job("   ") is None
+        assert await base.stop("") is None and job.status == "running"
+        await base.stop(job.id)
+    asyncio.run(main())
+
+
+def test_jobs_are_scoped_to_their_origin(home):
+    alice = {"accountId": "acc", "conversationId": "alice", "agentId": "ag"}
+    bob = {"accountId": "acc", "conversationId": "bob", "agentId": "ag"}
+
+    async def main():
+        job = await cc.start("hello", session="old-33", origin=alice)
+        await asyncio.wait_for(job.task, 10)
+        assert [j["id"] for j in base.list_jobs(scope=alice)] == [job.id]
+        assert base.list_jobs(scope=bob) == [] and base.get_job(job.id, scope=bob) is None
+        assert await base.stop(job.id, scope=bob) is None
+        assert base.get_job(job.id, scope=None).id == job.id          # admin API sees all
+        on = {"guardrails": {"codingHarness": True}}
+        assert "from this chat" in await commands.handle(f"/code job {job.id}", origin=bob, agent=on)
+        assert job.id in await commands.handle("/code jobs", origin=alice, agent=on)
+        assert "Usage" in await commands.handle("/code stop", origin=alice, agent=on)
+    asyncio.run(main())
+
+
+def test_shutdown_kills_all_running_jobs_quickly(home):
+    async def main():
+        j1 = await cc.start("slow", session="old-33")
+        j2 = await cc.start("slow", session="proj-ab")
+        t0 = asyncio.get_event_loop().time()
+        await base.shutdown()
+        assert asyncio.get_event_loop().time() - t0 < 5
+        for j in (j1, j2):
+            assert j.status == "stopped" and j.proc.returncode is not None
+    asyncio.run(main())
+
+
+def test_resolve_session_uses_prefix_glob_not_full_scan(home, monkeypatch):
+    calls = []
+    real = cc.scan_transcript
+    monkeypatch.setattr(cc, "scan_transcript", lambda p, turns=0: (calls.append(p.stem), real(p, turns))[1])
+    assert cc.resolve_session("old-33")["id"] == "old-3333-bbbb"
+    assert calls == ["old-3333-bbbb"]            # only the matched transcript was parsed
+    assert cc.resolve_session("../etc") is None

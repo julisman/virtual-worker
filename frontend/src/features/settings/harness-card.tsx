@@ -25,7 +25,7 @@ interface Job {
 
 const PERMISSION_MODES = [
   ["", "Inherit Claude Code's setting"], ["acceptEdits", "Accept edits"], ["auto", "Auto"], ["plan", "Plan only"],
-  ["dontAsk", "Don't ask"], ["bypassPermissions", "Bypass permissions (dangerous)"],
+  ["dontAsk", "Don't ask"], ["manual", "Manual"], ["bypassPermissions", "Bypass permissions (dangerous)"],
 ] as const;
 const SANDBOXES = [["read-only", "Read-only"], ["workspace-write", "Workspace write"], ["danger-full-access", "Full access (dangerous)"]] as const;
 
