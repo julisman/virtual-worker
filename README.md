@@ -175,6 +175,44 @@ like the model server. It is an unofficial client: use a dedicated number and ac
 WhatsApp's terms. Businesses with a public URL can use the official **Cloud API**
 transport instead.
 
+## Let agents use a browser
+
+Agents get `browser_open`, `browser_snapshot`, `browser_click`, `browser_type` and
+friends: a real browser they drive step by step, with a persistent profile so your
+logins stick. Two ways to run it:
+
+**Launch mode (default).** Virtual Worker starts its own browser window. In the
+agent's settings, under **Browser control**, click **Open browser to log in** once,
+sign in to the sites your workers need, and close it; the sessions are kept. Nothing
+else to set up.
+
+**Attach mode: your own Chrome, with agent tabs grouped like Claude in Chrome.**
+
+1. Start Chrome with remote debugging on a dedicated profile (Chrome 136 and later
+   ignore the flag on the default profile):
+
+   ```bash
+   # macOS
+   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+     --remote-debugging-port=9222 --user-data-dir="$HOME/.virtual-worker/chrome-profile"
+   # Linux
+   google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.virtual-worker/chrome-profile"
+   ```
+
+2. Install the companion extension in that Chrome: open `chrome://extensions`, turn on
+   **Developer mode**, click **Load unpacked**, and pick the repository's
+   [`browser-extension/`](browser-extension/README.md) folder. It only groups tabs; it
+   has no popup, stores nothing, and talks to no server.
+3. In Virtual Worker open **Settings → Browser**, choose **Attach**, enter
+   `http://127.0.0.1:9222` as the CDP URL, and click **Relaunch agent browser**. Or set
+   `VW_BROWSER_CDP_URL=http://127.0.0.1:9222` before starting the backend.
+4. Ask a worker to open a page. Its tabs appear in a blue **Virtual Worker** tab group
+   next to yours. Agents never take over one of your tabs on their own; tell one to work
+   in a tab you have open and it switches there with `browser_tab_select`.
+
+If nothing is listening on the CDP URL, Virtual Worker falls back to launching its own
+browser and says so in the tool result, since the two browsers have separate logins.
+
 ## Security
 
 The backend binds to localhost, allows only local browser origins, checks the Host
