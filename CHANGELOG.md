@@ -8,6 +8,10 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Added
 
+- Evaluation suites: benchmark on-device models on reusable cases scored by exact
+  match, keywords, tool calls or an LLM judge; leaderboard with quality, tool
+  reliability, speed and memory; per-case drill-down; import/export; suites built from
+  chat feedback; promote the winner.
 - Coding harness: see your Claude Code and Codex sessions and send them prompts from any
   chat channel (`/code …`, `/codex …`), through a worker's `code_*` tools, or the API;
   results flow back into the chat, with progress posts while a run works, and replying

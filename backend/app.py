@@ -24,6 +24,7 @@ from routes.anthropic import router as anthropic_router
 from routes.auth import router as auth_router
 from routes.backup import router as backup_router
 from routes.feedback import router as feedback_router
+from routes.eval import router as eval_router
 from routes.harness import router as harness_router
 from routes.browser import router as browser_router
 from routes.channels import router as channels_router
@@ -98,6 +99,13 @@ async def lifespan(app: FastAPI):
     _log = logging.getLogger(__name__)
     # --- startup --------------------------------------------------------- #
     # Adopt a llama-server that survived a reload, else autostart the default.
+    try:
+        from storage import eval_store
+        n = eval_store.mark_stale_runs()
+        if n:
+            _log.info("eval: marked %d interrupted run(s)", n)
+    except Exception:  # noqa: BLE001
+        _log.debug("eval stale-run sweep failed", exc_info=True)
     try:
         await llama_manager.adopt_or_autostart()
     except Exception:
@@ -292,6 +300,7 @@ app.include_router(onboarding_router, prefix="/api/onboarding", tags=["onboardin
 # Analytics — historical cost/usage over the captured debug facts (PRD-06).
 app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(feedback_router, prefix="/api/feedback", tags=["feedback"])
+app.include_router(eval_router, prefix="/api/eval", tags=["eval"])
 app.include_router(harness_router, prefix="/api/harness", tags=["harness"])
 # Schedules — timed agent runs (cron / one-time).
 app.include_router(schedule_router, prefix="/api/agents", tags=["schedules"])

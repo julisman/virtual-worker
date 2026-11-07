@@ -56,6 +56,9 @@ MCP server, a remote upstream, or a connected chat channel.
   persistent profile so logins stick. It can also attach to your own running Chrome,
   where the small [companion extension](browser-extension/README.md) groups the
   agent's tabs the way Claude in Chrome does.
+- **Evaluate**: benchmark on-device models on a suite of cases (exact, keywords, tool
+  calls, LLM judge), with a leaderboard of quality, speed and memory, per-case
+  drill-down, suites built from your own chat feedback, and one-click promote.
 - **Coding harness**: see your Claude Code and Codex sessions and send them prompts from
   any chat channel (`/code …`, `/codex …`) or in plain language through a worker; results
   flow back into the same chat.

@@ -24,8 +24,9 @@ import { DocsPage } from "@/features/docs/docs-page";
 import { MonitoringPage } from "@/features/monitoring/monitoring-page";
 import { AnalyticsPage } from "@/features/analytics/analytics-page";
 import { DeliveriesPage } from "@/features/deliveries/deliveries-page";
+import { EvalsPage } from "@/features/evals/evals-page";
 
-type Tab = "onboarding" | "playground" | "agents" | "channels" | "team" | "templates" | "knowledge" | "wiki" | "hub"   | "connect"   | "deliveries" | "debug" | "monitor" | "analytics" | "docs" | "settings";
+type Tab = "onboarding" | "playground" | "agents" | "channels" | "team" | "templates" | "knowledge" | "wiki" | "hub"   | "connect"   | "deliveries" | "evals" | "debug" | "monitor" | "analytics" | "docs" | "settings";
 
 export interface SessionMeta { id: string; title: string; model: string | null; agentId?: string | null; updatedAt: string; messageCount: number }
 export interface OpenRequest { id: string | null; nonce: number }
@@ -54,6 +55,7 @@ const ExpandIcon = (p: IconProps) => <I {...p}><rect x="3" y="4" width="18" heig
 const PlusIcon = (p: IconProps) => <I {...p}><path d="M12 5v14M5 12h14" /></I>;
 const DocsIcon = (p: IconProps) => <I {...p}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></I>;
 const MonitorIcon = (p: IconProps) => <I {...p}><path d="M3 12h4l2 6 4-14 2 8h6" /></I>;
+const EvalsIcon = (p: IconProps) => <I {...p}><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></I>;
 const DeliveriesIcon = (p: IconProps) => <I {...p}><path d="M22 2 11 13" /><path d="M22 2 15 22l-4-9-9-4 20-7z" /></I>;
 const AnalyticsIcon = (p: IconProps) => <I {...p}><path d="M3 3v18h18" /><rect x="7" y="11" width="3" height="6" /><rect x="12" y="7" width="3" height="10" /><rect x="17" y="13" width="3" height="4" /></I>;
 const KnowledgeIcon = (p: IconProps) => <I {...p}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /><path d="M9 7h6M9 11h6" /></I>;
@@ -80,6 +82,7 @@ const NAV: (NavItem | NavGroup)[] = [
   { group: "Model", icon: ModelGroupIcon, items: [
     { id: "hub", label: "Models", icon: HubIcon },
     { id: "connect", label: "Connect", icon: ConnectIcon },
+    { id: "evals", label: "Evaluate", icon: EvalsIcon },
   ] },
   { id: "debug", label: "Debug", icon: DebugIcon },
   { id: "monitor", label: "Monitor", icon: MonitorIcon },
@@ -493,6 +496,7 @@ export function App() {
         {tab === "monitor" && <MonitoringPage />}
         {tab === "analytics" && <AnalyticsPage />}
         {tab === "deliveries" && <DeliveriesPage />}
+        {tab === "evals" && <EvalsPage />}
         {tab === "docs" && <DocsPage />}
         {tab === "settings" && <SettingsPage />}
       </main>

@@ -92,6 +92,7 @@ const CATEGORIES: Category[] = [
     sections: [
       { id: "models", title: "Models (Hub)", icon: HubIcon, keywords: "huggingface unsloth discover download gguf mlx fits my device on device activate cache parallel chunked resume cancel hf_token gated" },
       { id: "engines", title: "Inference Engines", icon: WrenchIcon, keywords: "llama.cpp llama-server mlx mlx_lm mlx_vlm vision managed mode upstream apple silicon ngl ctx port" },
+      { id: "evals", title: "Evaluate", icon: HubIcon, keywords: "evaluate evaluation suite benchmark leaderboard compare models quality tool calls judge rubric exact match tokens per second latency memory promote winner repetitions import export feedback" },
     ],
   },
   {
@@ -592,6 +593,21 @@ export VW_DEFAULT_MODEL="local-qwen"`}</Pre>
         <>Chat-channel replies also appear under the agent's Activity; schedule results show their latest delivery status next to the schedule.</>,
       ]} />
       <P>Rows are kept for <Code>VW_DELIVERY_RETENTION_DAYS</Code> (90 by default) and pruned by the hourly maintenance loop. Nothing on this page sends anything; it only reads the log.</P>
+    </>
+  ),
+  evals: (
+    <>
+      <P><Term>Evaluate</Term> answers "which local model should I run for this job?" with evidence. Define a <Term>suite</Term> of cases once, pick several on-device models, and run the same cases through each; the runtime activates them one at a time, the way it does when you switch models by hand, and restores the previous model when the run ends.</P>
+      <P>Each case is a prompt plus how to score the answer:</P>
+      <Bullets items={[
+        <><Term>Exact answer</Term>: the output must equal or contain the expected text after normalizing case and punctuation.</>,
+        <><Term>Keywords</Term>: the fraction of required words that appear.</>,
+        <><Term>Tool call</Term>: the case carries tool schemas; the model must call the expected tool with the expected arguments. This is the test that matters for a worker: a model that writes nicely but botches tool calls is useless on a board.</>,
+        <><Term>LLM judge</Term>: grading instructions and an optional reference answer; at run time you choose the judge, the model under test or an external provider you have a key for. Judged cases stay unscored if no judge is chosen.</>,
+      ]} />
+      <P>Starter cases of each type are one click away, suites import and export as JSON, and <Term>From feedback</Term> turns the replies you rated up or corrected in Chat into judged cases with the kept reply as the reference, so your own usage becomes the benchmark.</P>
+      <P>The <Term>leaderboard</Term> ranks models by quality, then speed: average score, tool-call reliability, tokens per second, latency, the model server's peak resident memory, and errors. Repetitions average out sampling noise. Click a case in the per-case table to read every model's answer side by side with the judge's rationale. <Term>Promote</Term> makes a model the active one. Results export as CSV or JSON, and every run records the suite version it ran against.</P>
+      <Tip>A run switches the active model and can take a while with several large models. Keep the machine awake (see <Code>docs/keep-awake.md</Code>) and expect the first case on each model to be slower while it loads.</Tip>
     </>
   ),
   harness: (
