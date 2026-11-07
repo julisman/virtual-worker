@@ -6,6 +6,13 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Coding harness: see your Claude Code sessions and send them prompts from any chat
+  channel (`/code …`), through a worker's `code_*` tools, or the API; results flow back
+  into the chat. Opt-in per worker; new sessions confined to allowed roots.
+- Chrome companion extension that groups agent tabs when attached to your own browser.
+
 ## [0.1.1] - 2026-11-07
 
 ### Fixed

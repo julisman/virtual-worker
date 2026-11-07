@@ -21,7 +21,8 @@ virtual-worker/
 │   ├── agent/          # the agent harness — runner.stream_run() → compose() → loop.run(); tools, worker,
 │   │                   #   scheduler, triggers, inbox (flow-back), crusher (context compression), wiki,
 │   │                   #   browser_control, skill_factory, team, vision_helper, doc_tools, …
-│   ├── channels/       # chat-channel plugins: base contract, manager, whatsapp/ (+ Node bridge), telegram, discord, slack, discord, slack
+│   ├── channels/       # chat-channel plugins: base contract, manager, whatsapp/ (+ Node bridge), telegram, discord, slack
+│   ├── harness/        # coding harness: claude_code.py (sessions, supervised `claude -p` runs), commands.py (/code)
 │   ├── vw_cli.py       # `./vw` service mode: detached supervisor, auto-restart, built UI
 │   ├── runtime/        # managed model server + engine management
 │   ├── gateway/        # protocol translators (Anthropic / Responses / Gemini) + providers.py /
@@ -102,6 +103,13 @@ inbound (browser / coding agents / later: chat channels)
   → runtime.llama_manager (managed model server) ─httpx─▶ upstream (:8080)
 ```
 
+- **Coding harness** (`harness/claude_code.py`, PRD §8.13): lists Claude Code sessions
+  from `~/.claude/sessions` (live registry) and `~/.claude/projects/*/*.jsonl` (transcripts),
+  and runs prompts as supervised `claude -p --output-format stream-json` subprocesses
+  (`Job`s; a live session is `--fork-session`ed). Surfaces: `agent/harness_tools.py`
+  (`code_*`, gated by `guardrails.codingHarness`), `harness/commands.py` (`/code` on
+  channels, results flow back via `manager.send`), `routes/harness.py`, Settings card.
+  New sessions only under `allowedRoots`. `VW_CLAUDE_HOME` / `VW_CLAUDE_BIN` override paths.
 - **Document tools** (`agent/doc_tools.py`): `document_read` / `document_info` for PDF
   (pypdf), docx/xlsx/pptx (stdlib zip + xml), CSV and text. Always composed; paths must be
   under the working folder or `<VW_HOME>/channels` (where chat attachments land). Output

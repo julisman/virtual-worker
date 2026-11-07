@@ -56,6 +56,7 @@ _ROLE_POLICY: dict[str, str] = {
     "/api/runtime": "admin",
     "/api/hub": "admin",
     "/api/backup": "admin",
+    "/api/harness": "admin",
     "/api/registries": "admin",
     "/api/browser": "admin",
     "/api/mcp": "admin",

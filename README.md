@@ -56,6 +56,9 @@ MCP server, a remote upstream, or a connected chat channel.
   persistent profile so logins stick. It can also attach to your own running Chrome,
   where the small [companion extension](browser-extension/README.md) groups the
   agent's tabs the way Claude in Chrome does.
+- **Coding harness**: see your Claude Code sessions and send them prompts from any chat
+  channel (`/code list`, `/code run <session> <prompt>`) or in plain language through a
+  worker; results flow back into the same chat.
 - **Knowledge wikis**: an agent-maintained wiki of cross-linked markdown pages, plus
   linked repository wikis, searchable with cited answers.
 - **Context compression**: large tool results are crushed to what matters, with the
@@ -212,6 +215,30 @@ else to set up.
 
 If nothing is listening on the CDP URL, Virtual Worker falls back to launching its own
 browser and says so in the tool result, since the two browsers have separate logins.
+
+## Drive Claude Code from your phone
+
+If Claude Code is installed, a worker can watch and steer it:
+
+1. **Settings → Coding harness**: confirm the `claude` binary was found, pick a permission
+   mode for headless runs (Accept edits is a good default), and list the directories under
+   which new sessions may start.
+2. In the worker's settings, turn on **Guardrails → Integrations → Coding harness**.
+3. From Telegram, WhatsApp, Discord or Slack:
+
+   ```
+   /code list                      your sessions, live ones first
+   /code show virtual-worker-72    the last exchanges of a session
+   /code run virtual-worker-72 run the tests and fix what fails
+   /code jobs                      runs started from here
+   ```
+
+   Or just ask the worker: "what is Claude doing on the ticketing project?", "tell it to
+   also update the changelog". The result of a run is posted back into the same chat when
+   Claude Code finishes, with turns, tool calls and cost.
+
+Sessions open in a terminal are forked rather than written to, new sessions are confined
+to the allowed roots, and the channel's allow-list decides who may send prompts at all.
 
 ## Security
 

@@ -256,6 +256,23 @@ carry a `deliverTo` list; agents call the `deliver` tool.
 
 ---
 
+
+## 5a. Coding harness (`harness/`)
+
+Claude Code is driven as an external tool, never embedded. `harness/claude_code.py`
+reads Claude Code's own state: `~/.claude/sessions/<pid>.json` for running sessions
+(project, name, busy or idle) and `~/.claude/projects/<slug>/<id>.jsonl` for
+transcripts (title, last prompt, last answer, turns). A prompt becomes a `Job`: a
+supervised `claude -p <prompt> --resume <id> --output-format stream-json`
+subprocess whose events are parsed as they stream and whose `result` record carries
+the answer, turn count and cost. A session that is open in a terminal is resumed
+with `--fork-session` so two processes never write one transcript. New sessions
+may only start under the configured allowed roots. Three surfaces share the
+module: the `code_*` worker tools (`agent/harness_tools.py`, gated by the
+`codingHarness` guardrail), the `/code` channel commands (`harness/commands.py`,
+which post a finished job back into the originating chat through the channel
+manager), and `/api/harness`.
+
 ## 6. Trace capture
 
 `middleware/api_debug.py` is a pure-ASGI middleware that tees a bounded copy of

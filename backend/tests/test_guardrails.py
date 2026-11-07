@@ -32,7 +32,8 @@ def test_defaults_applied(db):
                  "mcpToolResultChars": 40000, "wikiReadChars": 8000, "skillFactory": False,
                  "maxOutputTokens": 0,
                  "contextMode": "chars", "reserveTokens": 0, "contextTokens": 0,
-                 "compactKeep": "messages", "compactKeepAmount": 0, "channelSend": False}
+                 "compactKeep": "messages", "compactKeepAmount": 0, "channelSend": False,
+                 "codingHarness": False}
 
 
 def test_partial_update_merges_and_coerces(db):

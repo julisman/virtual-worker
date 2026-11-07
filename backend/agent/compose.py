@@ -26,6 +26,7 @@ from agent.crusher import make_retrieve_tool
 from agent.custom_tools import make_custom_tools
 from agent.delivery import make_deliver_tool
 from agent.channel_tools import make_channel_tools
+from agent.harness_tools import make_harness_tools
 from agent.doc_tools import DOC_TOOL_NAMES, make_doc_tools
 from agent.fs_tools import FS_TOOL_NAMES, FsError, make_fs_tools
 from agent.intern import build_board_context, make_intern_tools
@@ -231,6 +232,9 @@ def compose(agent: dict | None, *, extra_system: str | None = None,
         # "Your chat" — opt-in: message people on connected chat channels (WhatsApp, Telegram, …).
         if ((agent or {}).get("guardrails") or {}).get("channelSend"):
             registry.update(make_channel_tools(agent_id))
+        # Coding harness: look at and drive Claude Code sessions on this machine.
+        if ((agent or {}).get("guardrails") or {}).get("codingHarness"):
+            registry.update(make_harness_tools(agent_id))
         vault = settings.get("obsidianVault")
         if vault:
             system = (f"{system}\n\nDefault Obsidian vault: `{vault}`. Use this as the "
