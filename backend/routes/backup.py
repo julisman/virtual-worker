@@ -50,7 +50,7 @@ async def export(includeModels: bool = False, redactSecrets: bool = True):
         media_type="application/octet-stream",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
-            "X-Vesbak-Manifest": "manifest.json",
+            "X-Vwbak-Manifest": "manifest.json",
         },
     )
 

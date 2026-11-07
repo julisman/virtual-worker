@@ -1,9 +1,9 @@
 """Shared skill-pack core — format parsing, repo discovery, dependency resolution.
 
 Single source of truth for the agentskills.io ``SKILL.md`` handling used by both
-the Virtual Worker backend (:mod:`storage.skill_store`) and the standalone ``bin/ves-skill``
-installer CLI (which imports this module by file path — keep it **stdlib-only**
-and free of ``config``/app imports so the CLI runs under any Python).
+the Virtual Worker backend (:mod:`storage.skill_store`) and any standalone installer
+script that imports this module by file path — keep it **stdlib-only** and free of
+``config``/app imports so such a script runs under any Python).
 
 Layout conventions:
   - a skill is a folder containing ``SKILL.md`` (YAML-ish frontmatter + body)

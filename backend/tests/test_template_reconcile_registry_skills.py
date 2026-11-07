@@ -10,7 +10,7 @@ from storage import registry_store, skill_store, template_reconcile
 
 @pytest.fixture()
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw")
     return tmp_path
 
 
@@ -92,7 +92,7 @@ def test_dangling_internal_symlink_degrades_to_unresolved(isolated, monkeypatch)
 def test_reconcile_installs_registry_skill_and_reports_tool_and_unresolved(isolated, monkeypatch):
     registry_root = isolated / "registry"
     _write_skill(registry_root, "registry-only")
-    _write_skill(registry_root, "needs-registry-cli", requires_tools="ves-tool-not-installed")
+    _write_skill(registry_root, "needs-registry-cli", requires_tools="vw-tool-not-installed")
     record = registry_store.add_registry(str(registry_root))
     monkeypatch.setattr(skill_store, "list_builtin", lambda: [])
     monkeypatch.setattr(skill_store.shutil, "which", lambda _tool: None)

@@ -130,7 +130,7 @@ def test_array_field_minmax_exact_beyond_sample():
     import json
     r = crusher.crush(json.dumps(rows), "mcp__x__y", cap=3000)
     body = json.loads(r.text.rsplit("\n<<vw:", 1)[0])
-    fields = body["_ves_compressed"]["fields"]
+    fields = body["_vw_compressed"]["fields"]
     assert fields["v"]["max"] == 99999    # exact, as the TRUST note promises
 
 

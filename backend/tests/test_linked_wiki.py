@@ -16,7 +16,7 @@ from storage import agent_store, linked_wiki, wiki_store
 
 @pytest.fixture()
 def linked_repo(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "sample-kb"
     (repo / "docs" / "nested").mkdir(parents=True)
     (repo / "AGENTS.md").write_text("Use the registered query operation. Read CLAUDE.md for the full guide.\n")
@@ -238,7 +238,7 @@ def test_discover_operations_kind_from_manifest_and_instructions(tmp_path):
 
 
 def test_manifest_kind_change_invalidates_trust(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     repo.mkdir()
     (repo / "i.md").write_text("# i\n")
@@ -257,7 +257,7 @@ def test_manifest_kind_change_invalidates_trust(tmp_path, monkeypatch):
 # --- P3: linked_status / wiki_status surfaces --------------------------------- #
 
 def test_linked_status_exposes_p3_fields(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     repo.mkdir()
     (repo / "i.md").write_text("# i\n")
@@ -277,7 +277,7 @@ def test_linked_status_exposes_p3_fields(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
 def test_wiki_status_reports_moved_when_revision_changed(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
 
     def _git(*a):
         subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)

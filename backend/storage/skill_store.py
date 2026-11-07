@@ -325,7 +325,7 @@ def install_builtin(slug: str) -> dict:
             raise ValueError(
                 f"{slug!r} is an external-session skill (audience: external) — "
                 "it is loaded by an outside coding session via external CLI, not "
-                "by a Virtual Worker agent; see skills/ves/README.md")
+                "by a Virtual Worker agent; see skills/README.md")
         raise ValueError(f"no builtin skill {slug!r}")
     try:
         plan = skill_lib.resolve_deps([slug], packs)

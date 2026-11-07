@@ -24,7 +24,7 @@ import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-_AAD_LABEL = b"ves.reasoning.sidecar.v1|"
+_AAD_LABEL = b"vw.reasoning.sidecar.v1|"
 
 
 def derive_key(key_text: str, salt_bytes: bytes) -> bytes:

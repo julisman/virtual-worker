@@ -11,7 +11,7 @@ from storage import settings
 
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX perms only")
-def test_ves_json_is_owner_only(monkeypatch, tmp_path):
+def test_settings_json_is_owner_only(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APP_HOME", tmp_path)
     settings.set("providers", {"openai": {"apiKey": "sk-secret"}})
     p = tmp_path / "settings.json"

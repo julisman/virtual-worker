@@ -315,7 +315,7 @@ def _manifest(repo: Path) -> tuple[dict[str, Any], str | None]:
     try:
         value = json.loads(candidate.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}, "invalid .ves/wiki.json"
+        return {}, "invalid .virtual-worker/wiki.json"
     return value if isinstance(value, dict) else {}, None
 
 
@@ -505,7 +505,7 @@ def discover_operations(repo: Path, root: Path) -> list[dict[str, Any]]:
     """Enumerate candidate operations for a linked repository without running it.
 
     Three sources, each tagged, in precedence order: operations already in
-    ``.ves/wiki.json`` (``source="manifest"``), shell commands mentioned in the
+    ``.virtual-worker/wiki.json`` (``source="manifest"``), shell commands mentioned in the
     repository's AGENTS.md / CLAUDE.md / README docs (``source="instruction"``),
     and setup/sync/check-style commands inferred from repo conventions —
     scripts, Makefile targets, package.json scripts (``source="convention"``).

@@ -15,7 +15,7 @@ def _run(ddb, session, run_id, start, *, read, prompt, model="gpt-4o",
         "status_code": 200, "stream": True, "input_tokens": prompt,
         "output_tokens": 10, "cache_read": read, "cache_write": 0,
         "total_tokens": prompt + 10, "request_json":
-            '{"prompt_cache_key":"ves-key"}' if request_flags else None,
+            '{"prompt_cache_key":"vw-key"}' if request_flags else None,
     }, [{"type": "assistant", "text": "ok", "model": model,
          "provider": provider, "usage": usage}]
     + [{"type": "tool_call", "tool_name": name} for name in (tools or [])])

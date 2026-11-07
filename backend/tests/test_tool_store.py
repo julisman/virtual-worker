@@ -85,10 +85,10 @@ def test_get_tools_preserves_order(store):
 def test_fixed_params_round_trip(store):
     t = store.create_tool({
         "name": "invoke", "method": "POST", "url": "https://api.example.com/x",
-        "fixedParams": {"deployment_id": "abc123", "source": "ves"},
+        "fixedParams": {"deployment_id": "abc123", "source": "vw"},
     })
-    assert t["fixedParams"] == {"deployment_id": "abc123", "source": "ves"}
-    assert store.get_tool(t["id"])["fixedParams"]["source"] == "ves"
+    assert t["fixedParams"] == {"deployment_id": "abc123", "source": "vw"}
+    assert store.get_tool(t["id"])["fixedParams"]["source"] == "vw"
 
 
 def test_fixed_params_default_empty(store):

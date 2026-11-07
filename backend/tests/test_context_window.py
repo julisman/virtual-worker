@@ -163,7 +163,7 @@ def test_resolution_override_wins(home):
     assert w == 123_456 and src == "override"
 
 
-def test_resolution_ves_json_map_beats_catalog(home):
+def test_resolution_settings_json_map_beats_catalog(home):
     settings.set("modelWindows", {"deepseek-chat": 65_536})
     w, src = cw.resolve_window_sync(model="deepseek-chat", provider_id="deepseek",
                                     guardrail_context_tokens=0)
