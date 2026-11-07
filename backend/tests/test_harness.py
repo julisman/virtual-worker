@@ -12,7 +12,7 @@ import pytest
 
 import config
 from harness import claude_code as cc
-from harness import commands
+from harness import base, codex, commands
 
 FAKE_CLAUDE = textwrap.dedent('''\
     #!/usr/bin/env python3
@@ -75,7 +75,7 @@ def home(tmp_path, monkeypatch):
         {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Added 3 tests"}]}, "timestamp": "2026-11-06T01:00:09Z"},
     ])
     os.utime(slug / "old-3333-bbbb.jsonl", (1, 1))
-    return {"chome": chome, "proj": proj, "fake": fake}
+    return {"chome": chome, "proj": proj, "fake": fake, "app": tmp_path / "app"}
 
 
 def test_availability_and_settings(home):
@@ -149,12 +149,12 @@ def test_failure_timeout_and_stop(home, monkeypatch):
         job = await cc.start("fail", session="old-33")
         await asyncio.wait_for(job.task, 10)
         assert job.status == "failed" and "boom" in job.error
-        real = cc.get_settings
-        monkeypatch.setattr(cc, "get_settings", lambda: {**real(), "timeoutS": 1})
+        real = base.get_settings
+        monkeypatch.setattr(base, "get_settings", lambda: {**real(), "timeoutS": 1})
         job = await cc.start("slow", session="old-33")
         await asyncio.wait_for(job.task, 10)
         assert job.status == "failed" and "timed out" in job.error
-        monkeypatch.setattr(cc, "get_settings", real)
+        monkeypatch.setattr(base, "get_settings", real)
         job = await cc.start("slow", session="old-33")
         await asyncio.sleep(0.3)
         stopped = await cc.stop(job.id)
@@ -212,7 +212,7 @@ def test_routes(home):
     from app import app
     with TestClient(app) as c:
         st = c.get("/api/harness/status").json()
-        assert st["available"] and st["settings"]["maxTurns"] == 60
+        assert st["harnesses"]["claude"]["available"] and st["settings"]["maxTurns"] == 60
         assert c.put("/api/harness/settings", json={"permissionMode": "bad"}).status_code == 400
         assert c.put("/api/harness/settings", json={"allowedRoots": [str(home["proj"])]}).json()["allowedRoots"] == [str(home["proj"])]
         ss = c.get("/api/harness/sessions").json()["sessions"]
@@ -279,3 +279,117 @@ def test_channel_manager_routes_code_commands(home, monkeypatch):
         assert "/code" in ad.sent[-1]
         await m.stop()
     asyncio.run(main())
+
+
+# ─── Codex ───────────────────────────────────────────────────────────────────
+
+FAKE_CODEX = textwrap.dedent('''\
+    #!/usr/bin/env python3
+    import json, sys, os
+    args = sys.argv[1:]
+    if args == ["--version"]:
+        print("codex-cli 9.9.9"); sys.exit(0)
+    assert args[0] == "exec"
+    resume = args[1] == "resume"
+    sid = args[2] if resume else "new-codex-thread"
+    prompt = args[3] if resume else args[-1]
+    out = args[args.index("-o") + 1]
+    def emit(d): print(json.dumps(d), flush=True)
+    emit({"type": "thread.started", "thread_id": sid})
+    emit({"type": "turn.started"})
+    emit({"type": "item.completed", "item": {"type": "command_execution", "command": "ls -la"}})
+    if prompt == "fail":
+        emit({"type": "turn.failed", "error": {"message": "sign in again"}}); sys.exit(1)
+    emit({"type": "item.completed", "item": {"type": "agent_message", "text": f"codex did: {prompt}"}})
+    emit({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}})
+    open(out, "w").write(f"codex did: {prompt}\\n")
+    assert ("-C" in args) == (not resume) and "--skip-git-repo-check" in args
+''')
+
+
+@pytest.fixture
+def codex_home(home, tmp_path, monkeypatch):
+    chome = tmp_path / "codex"
+    monkeypatch.setattr(config, "CODEX_HOME", chome)
+    fake = tmp_path / "codex-bin"
+    fake.write_text(FAKE_CODEX)
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setattr(config, "CODEX_BIN", str(fake))
+    codex._version_cache.update(bin=None, version=None, at=0.0)
+    day = chome / "sessions" / "2026" / "11" / "07"
+    _jsonl(day / "rollout-2026-11-07T01-00-00-0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl", [
+        {"timestamp": "2026-11-07T01:00:00Z", "type": "session_meta", "payload": {"id": "0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "cwd": str(home["proj"]), "timestamp": "2026-11-07T01:00:00Z"}},
+        {"timestamp": "2026-11-07T01:00:01Z", "type": "turn_context", "payload": {"cwd": str(home["proj"]), "model": "gpt-5.5"}},
+        {"timestamp": "2026-11-07T01:00:02Z", "type": "event_msg", "payload": {"type": "user_message", "message": "refactor the parser"}},
+        {"timestamp": "2026-11-07T01:00:03Z", "type": "response_item", "payload": {"type": "function_call", "name": "shell"}},
+        {"timestamp": "2026-11-07T01:00:09Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "Parser refactored."}},
+    ])
+    return chome
+
+
+def test_codex_discovery_and_run(codex_home, home):
+    a = codex.availability()
+    assert a["available"] and a["version"].startswith("codex-cli")
+    ss = codex.list_sessions()
+    assert len(ss) == 1 and ss[0]["id"] == "0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    assert ss[0]["title"] == "refactor the parser" and ss[0]["lastAssistant"] == "Parser refactored."
+    assert not ss[0]["live"] and ss[0]["harness"] == "codex"
+    d = codex.session_detail(ss[0]["id"], turns=4)
+    assert d["model"] == "gpt-5.5" and d["toolCalls"] == 1 and [t["role"] for t in d["turns"]] == ["user", "assistant"]
+    assert codex.resolve_session("0199aa")["id"] == ss[0]["id"]
+
+    async def main():
+        job = await codex.start("tidy", session="0199aa")
+        assert job.harness == "codex" and job.session_id == ss[0]["id"] and not job.forked
+        assert codex.list_sessions()[0]["live"] is True        # busy while our job runs on it
+        await asyncio.wait_for(job.task, 10)
+        assert job.status == "done" and job.result == "codex did: tidy" and job.tool_calls == 1 and job.num_turns == 1
+        assert "Codex finished job" in base.render_job(job)
+        base.set_settings({"allowedRoots": [str(home["proj"].parent)]})
+        job = await codex.start("hello", project=str(home["proj"]))
+        await asyncio.wait_for(job.task, 10)
+        assert job.status == "done" and job.new_session_id == "new-codex-thread"
+        job = await codex.start("fail", session="0199aa")
+        await asyncio.wait_for(job.task, 10)
+        assert job.status == "failed" and "sign in again" in job.error
+    asyncio.run(main())
+
+
+def test_codex_commands_and_routes(codex_home, home, monkeypatch):
+    sent = []
+
+    class FakeManager:
+        async def send(self, account_id, target, text, **kw):
+            sent.append(text); return {"status": "sent"}
+    import channels.manager as mgr
+    monkeypatch.setattr(mgr, "manager", FakeManager())
+    on = {"guardrails": {"codingHarness": True}}
+    origin = {"accountId": "a", "conversationId": "c"}
+
+    async def main():
+        assert "Codex sessions" in await commands.handle("/codex list", origin=origin, agent=on)
+        assert "Claude Code sessions" in await commands.handle("/code list", origin=origin, agent=on)
+        assert "/codex" in await commands.handle("/code", origin=origin, agent=on)
+        reply = await commands.handle("/codex run 0199aa add docs", origin=origin, agent=on)
+        assert reply.startswith("Started job") and "Codex session" in reply
+        job = list(base.JOBS.values())[-1]
+        await asyncio.wait_for(job.task, 10)
+        await asyncio.sleep(0.05)
+        assert "codex did: add docs" in sent[-1]
+    asyncio.run(main())
+
+    monkeypatch.undo()                       # the real channel manager must start with the app
+    monkeypatch.setattr(config, "APP_HOME", home["app"]); monkeypatch.setattr(config, "CLAUDE_HOME", home["chome"])
+    monkeypatch.setattr(config, "CLAUDE_BIN", str(home["fake"])); monkeypatch.setattr(config, "CODEX_HOME", codex_home)
+    monkeypatch.setattr(config, "CODEX_BIN", str(codex_home.parent / "codex-bin"))
+    from fastapi.testclient import TestClient
+    from app import app
+    with TestClient(app) as c:
+        st = c.get("/api/harness/status").json()
+        assert st["harnesses"]["codex"]["available"] and st["harnesses"]["claude"]["available"]
+        assert c.get("/api/harness/sessions?harness=codex").json()["sessions"][0]["harness"] == "codex"
+        assert c.get("/api/harness/sessions?harness=nope").status_code == 400
+        assert c.put("/api/harness/settings", json={"codexSandbox": "yolo"}).status_code == 400
+        assert c.put("/api/harness/settings", json={"codexSandbox": "read-only"}).json()["codexSandbox"] == "read-only"
+        r = c.post("/api/harness/run", json={"prompt": "x", "session": "0199aa", "harness": "codex"})
+        assert r.status_code == 200 and r.json()["harness"] == "codex"

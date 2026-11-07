@@ -179,7 +179,7 @@ async def lifespan(app: FastAPI):
     from agent.tools import close_browser
     from agent.browser_control import close_control_browser
     from agent.mcp_client import close_pool
-    from harness.claude_code import shutdown as harness_shutdown
+    from harness.base import shutdown as harness_shutdown
 
     try:
         async with asyncio.timeout(6):          # stay under uvicorn's 8s cap
