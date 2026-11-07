@@ -256,6 +256,30 @@ carry a `deliverTo` list; agents call the `deliver` tool.
 
 ---
 
+
+## 5a. Coding harnesses (`harness/`)
+
+Coding agents are driven as external tools, never embedded. `harness/base.py`
+defines the adapter contract (discover sessions, build the headless command,
+parse its streamed events), the shared settings, the `Job` record and the
+subprocess supervisor with timeout, stop and a three-run cap. Two adapters ship:
+
+- **Claude Code** (`claude_code.py`) reads `~/.claude/sessions/<pid>.json` for
+  running sessions (project, name, busy or idle) and
+  `~/.claude/projects/<slug>/<id>.jsonl` for transcripts, and runs
+  `claude -p <prompt> --resume <id> --output-format stream-json`; the `result`
+  record carries the answer, turns and cost. A session open in a terminal is
+  resumed with `--fork-session` so two processes never write one transcript.
+- **Codex** (`codex.py`) reads `~/.codex/sessions/**/rollout-*.jsonl` and runs
+  `codex exec --json` (new, with `-C` and `-s`) or `codex exec resume <id> --json`;
+  the final answer comes from `-o <file>`. Codex has no live-process registry.
+
+New sessions may only start under the configured allowed roots. Three surfaces
+share the module: the `code_*` worker tools (`agent/harness_tools.py`, with a
+`harness` argument, gated by the `codingHarness` guardrail), the `/code` and
+`/codex` channel commands (`harness/commands.py`, which post a finished job back
+into the originating chat through the channel manager), and `/api/harness`.
+
 ## 6. Trace capture
 
 `middleware/api_debug.py` is a pure-ASGI middleware that tees a bounded copy of

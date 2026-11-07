@@ -24,6 +24,7 @@ from routes.anthropic import router as anthropic_router
 from routes.auth import router as auth_router
 from routes.backup import router as backup_router
 from routes.feedback import router as feedback_router
+from routes.harness import router as harness_router
 from routes.browser import router as browser_router
 from routes.channels import router as channels_router
 from routes.chat import router as chat_router
@@ -178,10 +179,12 @@ async def lifespan(app: FastAPI):
     from agent.tools import close_browser
     from agent.browser_control import close_control_browser
     from agent.mcp_client import close_pool
+    from harness.base import shutdown as harness_shutdown
 
     try:
         async with asyncio.timeout(6):          # stay under uvicorn's 8s cap
             await asyncio.gather(
+                _stop("harness", harness_shutdown()),
                 _stop("scheduler", scheduler.stop()),
                 _stop("triggers", triggers.stop()),
                 _stop("inbox", inbox_manager.stop()),
@@ -289,6 +292,7 @@ app.include_router(onboarding_router, prefix="/api/onboarding", tags=["onboardin
 # Analytics — historical cost/usage over the captured debug facts (PRD-06).
 app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(feedback_router, prefix="/api/feedback", tags=["feedback"])
+app.include_router(harness_router, prefix="/api/harness", tags=["harness"])
 # Schedules — timed agent runs (cron / one-time).
 app.include_router(schedule_router, prefix="/api/agents", tags=["schedules"])
 # Delivery — outbound channels + audit log (in-app chat, desktop, webhook).

@@ -56,6 +56,9 @@ MCP server, a remote upstream, or a connected chat channel.
   persistent profile so logins stick. It can also attach to your own running Chrome,
   where the small [companion extension](browser-extension/README.md) groups the
   agent's tabs the way Claude in Chrome does.
+- **Coding harness**: see your Claude Code and Codex sessions and send them prompts from
+  any chat channel (`/code …`, `/codex …`) or in plain language through a worker; results
+  flow back into the same chat.
 - **Knowledge wikis**: an agent-maintained wiki of cross-linked markdown pages, plus
   linked repository wikis, searchable with cited answers.
 - **Context compression**: large tool results are crushed to what matters, with the
@@ -174,6 +177,72 @@ The linked-device transport is a small Node sidecar built on the open-source
 like the model server. It is an unofficial client: use a dedicated number and accept
 WhatsApp's terms. Businesses with a public URL can use the official **Cloud API**
 transport instead.
+
+## Let agents use a browser
+
+Agents get `browser_open`, `browser_snapshot`, `browser_click`, `browser_type` and
+friends: a real browser they drive step by step, with a persistent profile so your
+logins stick. Two ways to run it:
+
+**Launch mode (default).** Virtual Worker starts its own browser window. In the
+agent's settings, under **Browser control**, click **Open browser to log in** once,
+sign in to the sites your workers need, and close it; the sessions are kept. Nothing
+else to set up.
+
+**Attach mode: your own Chrome, with agent tabs grouped like Claude in Chrome.**
+
+1. Start Chrome with remote debugging on a dedicated profile (Chrome 136 and later
+   ignore the flag on the default profile):
+
+   ```bash
+   # macOS
+   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+     --remote-debugging-port=9222 --user-data-dir="$HOME/.virtual-worker/chrome-profile"
+   # Linux
+   google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.virtual-worker/chrome-profile"
+   ```
+
+2. Install the companion extension in that Chrome: open `chrome://extensions`, turn on
+   **Developer mode**, click **Load unpacked**, and pick the repository's
+   [`browser-extension/`](browser-extension/README.md) folder. It only groups tabs; it
+   has no popup, stores nothing, and talks to no server.
+3. In Virtual Worker open **Settings → Browser**, choose **Attach**, enter
+   `http://127.0.0.1:9222` as the CDP URL, and click **Relaunch agent browser**. Or set
+   `VW_BROWSER_CDP_URL=http://127.0.0.1:9222` before starting the backend.
+4. Ask a worker to open a page. Its tabs appear in a blue **Virtual Worker** tab group
+   next to yours. Agents never take over one of your tabs on their own; tell one to work
+   in a tab you have open and it switches there with `browser_tab_select`.
+
+If nothing is listening on the CDP URL, Virtual Worker falls back to launching its own
+browser and says so in the tool result, since the two browsers have separate logins.
+
+## Drive Claude Code or Codex from your phone
+
+If Claude Code or the Codex CLI is installed, a worker can watch and steer it:
+
+1. **Settings → Coding harness**: confirm the binaries were found, pick Claude Code's
+   permission mode for headless runs (Accept edits is a good default) and Codex's sandbox
+   (Workspace write), and list the directories under which new sessions may start.
+2. In the worker's settings, turn on **Guardrails → Integrations → Coding harness**.
+3. From Telegram, WhatsApp, Discord or Slack:
+
+   ```
+   /code list                      your sessions, live ones first
+   /code show virtual-worker-72    the last exchanges of a session
+   /code run virtual-worker-72 run the tests and fix what fails
+   /code jobs                      runs started from here
+   /codex list                     the same commands for Codex
+   ```
+
+   Or just ask the worker: "what is Claude doing on the ticketing project?", "tell it to
+   also update the changelog". While a run works you get a short progress line now and
+   then; when it finishes the reply lands in the same chat with turns, tool calls and
+   cost. Reply to any of those messages with plain text to send a follow-up into the same
+   session.
+
+Claude Code sessions open in a terminal are forked rather than written to, new sessions
+are confined to the allowed roots, and the channel's allow-list decides who may send
+prompts at all.
 
 ## Security
 

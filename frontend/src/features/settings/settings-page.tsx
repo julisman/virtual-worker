@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiJson, apiPost } from "@/lib/api";
 import { BackupCard } from "./backup-card";
 import { EmailCard } from "./email-card";
+import { HarnessCard } from "./harness-card";
 import { BrowserCard } from "./browser-card";
 import { VisionHelperCard } from "./vision-helper-card";
 import { TeamSettings } from "@/features/team/team-settings";
@@ -166,6 +167,7 @@ export function SettingsPage() {
           <EmailCard />
           <BackupCard />
           <VisionHelperCard />
+          <HarnessCard />
           <TeamSettings />
         </div>
       </div>
