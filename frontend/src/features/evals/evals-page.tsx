@@ -173,9 +173,9 @@ function CaseEditor({ c, i, onChange, onRemove }: { c: Case; i: number; onChange
     <div className="rounded-xl border border-pressed bg-softer p-3">
       <div className="flex items-start gap-2">
         <span className="mt-2 w-6 shrink-0 text-right font-mono text-[11px] text-mute">{i + 1}</span>
-        <textarea className={`${inputCls} min-h-[42px] resize-y`} rows={2} value={c.prompt}
+        <textarea className={`${inputCls} min-h-[42px] min-w-0 flex-1 resize-y`} rows={2} value={c.prompt}
           onChange={(e) => onChange({ prompt: e.target.value })} placeholder="The prompt to send…" />
-        <select className={`${inputCls} w-36 shrink-0`} value={c.scorer ?? "auto"} onChange={(e) => setScorer(e.target.value as Scorer)} title="How to score the answer">
+        <select className={`${inputCls.replace("w-full", "w-44 shrink-0")}`} value={c.scorer ?? "auto"} onChange={(e) => setScorer(e.target.value as Scorer)} title="How to score the answer">
           {(["auto", "exact", "rubric", "judge", "tool", "none"] as Scorer[]).map((s) => <option key={s} value={s}>{SCORER_LABEL[s]}{s === "auto" ? ` (${SCORER_LABEL[kind]})` : ""}</option>)}
         </select>
         <button onClick={onRemove} className="mt-1 rounded-lg px-2 text-mute hover:text-danger" title="Remove">✕</button>
