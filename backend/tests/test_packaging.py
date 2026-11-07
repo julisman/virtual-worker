@@ -14,14 +14,14 @@ def _reload_config(monkeypatch, env: dict):
     return importlib.reload(config)
 
 
-def test_dev_defaults_to_dot_ves(monkeypatch):
+def test_dev_defaults_to_dot_data(monkeypatch):
     cfg = _reload_config(monkeypatch, {})
     assert cfg.PACKAGED is False
     assert cfg.APP_HOME == Path.home() / ".virtual-worker"
     assert cfg.LLAMA_BIN == "llama-server"          # expects it on PATH in dev
 
 
-def test_ves_home_override_wins_even_when_packaged(monkeypatch, tmp_path):
+def test_vw_home_override_wins_even_when_packaged(monkeypatch, tmp_path):
     cfg = _reload_config(monkeypatch, {"VW_PACKAGED": "1", "VW_HOME": str(tmp_path)})
     assert cfg.PACKAGED is True
     assert cfg.APP_HOME == tmp_path

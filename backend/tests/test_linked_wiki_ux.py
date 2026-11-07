@@ -15,7 +15,7 @@ from storage import linked_wiki, wiki_jobs, wiki_store
 
 @pytest.fixture()
 def linked_repo(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     repo.mkdir()
     (repo / "intro.md").write_text("# Intro\n\nHello.\n")
@@ -163,7 +163,7 @@ def test_linked_list_pages_page_delegates(linked_repo):
 def test_setup_kind_stamps_setup_completed_and_clears_pending(tmp_path, monkeypatch):
     import json
 
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     repo.mkdir()
     (repo / "intro.md").write_text("# Intro\n")
@@ -181,7 +181,7 @@ def test_setup_kind_stamps_setup_completed_and_clears_pending(tmp_path, monkeypa
 def test_sync_kind_via_job_stamps_last_sync_even_with_custom_name(tmp_path, monkeypatch):
     import json
 
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     repo.mkdir()
     (repo / "intro.md").write_text("# Intro\n")

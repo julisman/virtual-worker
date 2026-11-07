@@ -14,7 +14,7 @@ from storage import wiki_store
 
 @pytest.fixture()
 def linked_with_skill(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     skill_dir = repo / ".claude" / "skills" / "foo"
     (skill_dir / "references").mkdir(parents=True)
@@ -49,7 +49,7 @@ def test_repo_skill_in_catalog_and_loadable(linked_with_skill):
     assert "not found" in blocked or "not allowed" in blocked
 
 
-def test_repo_skill_is_never_copied_into_ves_home(linked_with_skill):
+def test_repo_skill_is_never_copied_into_vw_home(linked_with_skill):
     w, _repo = linked_with_skill
     agent_skills.collect_wiki_skills({"id": "a", "wikis": [w["id"]]})
     # Nothing was copied into the Virtual Worker skill library.

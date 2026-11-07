@@ -162,22 +162,22 @@ def test_anthropic_subscription_markers_keep_preamble_unmarked():
 
 
 def test_prompt_cache_key_body_builders_and_codex_reasoning():
-    payload = {"model": "m", "messages": [], "prompt_cache_key": "ves-key",
+    payload = {"model": "m", "messages": [], "prompt_cache_key": "vw-key",
                "reasoning_effort": "high"}
     assert egress._openai_body(payload, {"provider": "openai", "prompt_cache_key": True})[
-        "prompt_cache_key"] == "ves-key"
+        "prompt_cache_key"] == "vw-key"
     assert "prompt_cache_key" not in egress._openai_body(
         payload, {"provider": "openai-compatible", "prompt_cache_key": False})
     req = egress._to_responses_request(payload, {"prompt_cache_key": True})
-    assert req["prompt_cache_key"] == "ves-key" and payload["reasoning_effort"] == "high"
+    assert req["prompt_cache_key"] == "vw-key" and payload["reasoning_effort"] == "high"
     assert "prompt_cache_key" not in egress._to_responses_request(
         payload, {"prompt_cache_key": False})
     codex = egress._to_codex_request(payload)
-    assert codex["prompt_cache_key"] == "ves-key" and codex["store"] is False
+    assert codex["prompt_cache_key"] == "vw-key" and codex["store"] is False
 
 
 def test_official_retention_is_target_driven_and_custom_gateways_stay_clean():
-    payload = {"model": "m", "messages": [], "prompt_cache_key": "ves-key"}
+    payload = {"model": "m", "messages": [], "prompt_cache_key": "vw-key"}
     assert egress._openai_body(payload, {"provider": "openai", "prompt_cache_key": True,
                                          "prompt_cache_retention": "24h"})[
         "prompt_cache_retention"] == "24h"
@@ -203,7 +203,7 @@ def test_anthropic_extended_ttl_is_opt_in_and_target_driven():
 
 
 def test_custom_empty_cache_map_has_no_new_body_fields():
-    payload = {"model": "m", "messages": [], "prompt_cache_key": "ves-key"}
+    payload = {"model": "m", "messages": [], "prompt_cache_key": "vw-key"}
     target = {"provider": "openai-compatible", "prompt_cache_key": False}
     assert "prompt_cache_key" not in egress._openai_body(payload, target)
     assert "prompt_cache_key" not in egress._to_responses_request(payload, target)

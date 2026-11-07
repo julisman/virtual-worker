@@ -1,5 +1,5 @@
 {
-  "name": "ves-desktop",
+  "name": "virtual-worker-desktop",
   "version": "0.2.10",
   "description": "Virtual Worker — local-first LLM studio, packaged as a one-click desktop app.",
   "author": "Virtual Worker contributors",

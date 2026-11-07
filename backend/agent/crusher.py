@@ -311,7 +311,7 @@ def _crush_array(rows: list, budget: int, stats: dict) -> dict:
 
     stats["rows_omitted"] += n - len(keep_idx)
     return {
-        "_ves_compressed": {
+        "_vw_compressed": {
             "totalRows": n,
             "keptRows": len(keep_idx),
             "keptIndexes": keep_idx if len(keep_idx) <= 40 else None,

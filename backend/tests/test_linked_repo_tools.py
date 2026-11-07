@@ -14,7 +14,7 @@ from storage import wiki_store
 
 @pytest.fixture()
 def linked(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     (repo / "sources").mkdir(parents=True)
     (repo / "AGENTS.md").write_text("Use the index.\n")
@@ -76,7 +76,7 @@ def test_refused_repo_shell_logs_a_refusal_row(linked):
 
 
 def test_wiki_arg_routes_between_two_linked_repos(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo1 = tmp_path / "one"
     repo1.mkdir()
     (repo1 / "only-one.md").write_text("# one")
@@ -96,13 +96,13 @@ def test_wiki_arg_routes_between_two_linked_repos(tmp_path, monkeypatch):
 
 
 def test_no_linked_wiki_returns_empty(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     reg, note = make_linked_repo_tools({"id": "a", "wikis": []})
     assert reg == {} and note == ""
 
 
 def test_default_repo_tooling_runs_repo_script_readonly_refuses(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     (repo / "scripts").mkdir(parents=True)
     (repo / "intro.md").write_text("# i\n")

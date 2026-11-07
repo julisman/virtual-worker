@@ -147,10 +147,10 @@ def test_import_creates_pre_import_rollback(tmp_path, monkeypatch):
     assert pre_path.name.endswith(".bak.vwbak")
     assert pre_path.parent == (dst / "backups")
     # The rollback is a valid, importable .vwbak.
-    assert backup.read_manifest(pre_path.read_bytes())["version"] == backup.VESBAK_VERSION
+    assert backup.read_manifest(pre_path.read_bytes())["version"] == backup.ARCHIVE_VERSION
 
 
-def test_import_rejects_non_vesbak(tmp_path, monkeypatch):
+def test_import_rejects_non_archive(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_HOME", tmp_path / "home")
     with pytest.raises(ValueError):
         backup.import_backup(b"not a zip")

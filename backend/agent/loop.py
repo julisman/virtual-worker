@@ -978,7 +978,7 @@ async def run(
     # caller (done/error events) and stamped onto activity rows for deep-linking —
     # the same id the trail is persisted under in _record's finally block.
     run_id = str(uuid.uuid4())
-    _prompt_cache_key = "ves-" + hashlib.sha256(
+    _prompt_cache_key = "vw-" + hashlib.sha256(
         f"{agent_id or ''}:{session_id}".encode()).hexdigest()[:32]
     trace = {"debugRunId": run_id, "debugSessionId": session_id}
     start = _now_iso()

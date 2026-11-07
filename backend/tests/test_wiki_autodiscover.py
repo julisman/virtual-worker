@@ -20,7 +20,7 @@ from storage import agent_store, linked_wiki, wiki_jobs, wiki_store
 
 @pytest.fixture()
 def linked_repo(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     repo.mkdir()
     (repo / "intro.md").write_text("# Intro\n\nHello.\n")
@@ -53,7 +53,7 @@ def test_discover_finds_manifest_and_instruction_ops(linked_repo):
 
 
 def test_discover_infers_lifecycle_ops_from_conventions(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "conv"
     (repo / "scripts").mkdir(parents=True)
     (repo / "intro.md").write_text("# Intro\n")
@@ -77,7 +77,7 @@ def test_discover_mines_lifecycle_commands_from_readme(tmp_path, monkeypatch):
     # invoke them through a dispatcher script (./scripts/kb setup). Discovery must
     # mine the README and map lifecycle verbs to their kind; read-only query
     # commands mentioned there are not lifecycle ops and are dropped.
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     (repo / "scripts").mkdir(parents=True)
     (repo / "intro.md").write_text("# Intro\n")
@@ -98,7 +98,7 @@ def test_discover_mines_lifecycle_commands_from_readme(tmp_path, monkeypatch):
 
 
 def test_discover_prefers_manifest_over_convention(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "conv2"
     repo.mkdir()
     (repo / "intro.md").write_text("# Intro\n")
@@ -131,7 +131,7 @@ def test_link_propose_registers_only_lifecycle_ops(tmp_path, monkeypatch):
     # Read-only kb subcommands mentioned in docs must NOT clutter the proposal —
     # the agent runs those directly under repo tooling. Only setup/sync/check-style
     # ops (plus anything the manifest declared) are offered to register.
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves-home")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw-home")
     repo = tmp_path / "kb"
     repo.mkdir()
     (repo / "intro.md").write_text("# Intro\n")

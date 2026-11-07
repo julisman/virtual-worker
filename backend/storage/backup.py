@@ -47,7 +47,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-VESBAK_VERSION = "1"
+ARCHIVE_VERSION = "1"
 APP_VERSION = "0.1.1"
 MANIFEST_NAME = "manifest.json"
 REDACTED = "__REDACTED__"
@@ -217,7 +217,7 @@ def write_backup(fh, include_models: bool = False, redact_secrets: bool = True) 
                             contents["models"] += 1
 
             manifest = {
-                "version": VESBAK_VERSION,
+                "version": ARCHIVE_VERSION,
                 "app": "virtual-worker",
                 "appVersion": APP_VERSION,
                 "createdAt": _now_iso(),
@@ -288,9 +288,9 @@ def read_manifest(data: bytes) -> dict:
     except ValueError as exc:
         raise ValueError(f"corrupt manifest: {exc}") from exc
     ver = str(manifest.get("version"))
-    if ver != VESBAK_VERSION:
+    if ver != ARCHIVE_VERSION:
         raise ValueError(
-            f"unsupported archive version {ver!r} (this Virtual Worker reads version {VESBAK_VERSION})"
+            f"unsupported archive version {ver!r} (this Virtual Worker reads version {ARCHIVE_VERSION})"
         )
     return manifest
 

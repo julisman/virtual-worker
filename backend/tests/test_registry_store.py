@@ -14,7 +14,7 @@ from storage import registry_store, template_manifest
 
 @pytest.fixture()
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_HOME", tmp_path / "ves")
+    monkeypatch.setattr(config, "APP_HOME", tmp_path / "vw")
     return tmp_path
 
 
@@ -28,7 +28,7 @@ def _manifest(template_id="team-agent", version="1.2.3"):
 
 
 def _git_repo(root: Path, *, with_skill=True) -> Path:
-    repo = root / "ves-templates"
+    repo = root / "vw-templates"
     (repo / "templates" / "team-agent").mkdir(parents=True)
     (repo / "templates" / "team-agent" / "template.json").write_text(
         json.dumps(_manifest()), encoding="utf-8"
@@ -185,7 +185,7 @@ def test_explicit_subdir_is_scanned(isolated):
     assert reg["templateCount"] == 1
 
 
-def test_default_subdir_ves_registry_autodetected(isolated):
+def test_default_subdir_vw_registry_autodetected(isolated):
     repo = _local_registry_dir(isolated, registry_store.DEFAULT_SUBDIR)
     reg = registry_store.add_registry(str(repo))
     assert reg["subdir"] is None
