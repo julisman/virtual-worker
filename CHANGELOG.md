@@ -8,6 +8,11 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Added
 
+- Social lead-gen skill pack (`skills/social/`, eight skills) and a Social Lead-Gen
+  worker template: prospecting, budgeted public replies, DM and comment triage with
+  WhatsApp hand-off, health checks, insight research and watchlists, driven by the
+  brand's logged-in browser; guardrails live in a bundled script and a human-only
+  control panel.
 - Evaluation suites: benchmark on-device models on reusable cases scored by exact
   match, keywords, tool calls or an LLM judge; leaderboard with quality, tool
   reliability, speed and memory; per-case drill-down; import/export; suites built from

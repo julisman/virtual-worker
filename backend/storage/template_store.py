@@ -288,6 +288,57 @@ BUILTIN_TEMPLATES: list[dict] = [
         "variables": [],
         "starterTasks": [],
     },
+    {
+        "id": "social-lead-gen",
+        "name": "{{business_name}} Social Lead-Gen",
+        "description": "Finds people publicly asking for what {{business_name}} sells on "
+        "Threads, TikTok and Instagram, replies helpfully in public under a strict budget, "
+        "answers DMs and comments, and routes everyone into WhatsApp. Drives the brand's "
+        "logged-in browser; most of it is guardrails.",
+        "category": "Marketing",
+        "role": "Social lead-gen operator",
+        "persona": (
+            "You run top-of-funnel lead generation for {{business_name}}, which sells {{sells}}. "
+            "You do two jobs: prospect (find people publicly asking for what the business "
+            "sells, collect them with a link back, reply helpfully in public under the daily "
+            "budget) and triage (answer DMs and comments on the business's own posts, move "
+            "people to WhatsApp). You are a router, not a closer and not a marketer: you never "
+            "create content, never close a sale, and your job ends when a person lands in "
+            "WhatsApp. Before touching a browser tab you run the guard; before every public "
+            "reply you run the dedupe gate; you never put a link or a number in a public reply; "
+            "you never retry through a platform block; you log every action that touched a "
+            "human immediately. If the control panel says an account may not speak, you say "
+            "so and stop; only the owner changes that."
+        ),
+        "model": None,
+        "temperature": 0.4,
+        "topP": 0.95,
+        "topK": 64,
+        "tools": ["browser_search", "browser_fetch", "browser_open", "browser_snapshot", "browser_click",
+                  "browser_click_selector", "browser_type", "browser_read", "browser_press", "browser_back",
+                  "browser_tabs", "browser_tab_select", "browser_screenshot"],
+        "skills": ["social-core", "social-prospect", "social-engage", "social-dm", "social-comments",
+                   "social-health", "social-insight", "social-watch"],
+        "guardrails": {"shell": "workspace", "verify": True, "maxIterations": 14, "dailyCap": 120,
+                       "shellTimeoutS": 90},
+        "variables": [
+            {"key": "business_name", "label": "Business name", "type": "text",
+             "default": "Acme Rentals", "required": True, "help": "Used in the worker's name and persona."},
+            {"key": "sells", "label": "What it sells", "type": "text",
+             "default": "scooter rental", "required": True,
+             "help": "One phrase; the brand kit holds the details."},
+        ],
+        "starterTasks": [
+            {"title": "Set up the social lead-gen guardrails",
+             "description": "Run `python3 social.py init --brand <slug>` (load the script from the "
+             "Social Core skill first), then tell the owner which fields to fill in the control "
+             "panel and the brand kit. Leave ramp_start null for a read-only trial. Finish with "
+             "`python3 social.py check`."},
+            {"title": "First prospecting run (read-only)",
+             "description": "Once `check` passes and the browser is logged in, run Social Prospect "
+             "for the brand on Threads and report counts by tier and which queries worked."},
+        ],
+    },
 ]
 
 _BUILTIN_BY_ID = {t["id"]: t for t in BUILTIN_TEMPLATES}
