@@ -108,6 +108,7 @@ const CATEGORIES: Category[] = [
     sections: [
       { id: "monitoring", title: "Monitoring", icon: MonitorIcon, keywords: "memory ram vram unified usage cpu load disk free model process rss uptime runtime health error log inference server resource pressure oom killed" },
       { id: "debug", title: "API Debugging", icon: DebugIcon, keywords: "trace api calls request response tool calls tokens cost latency errors session chat anthropic capture app.db middleware" },
+      { id: "harness", title: "Coding harness", icon: WrenchIcon, keywords: "claude code codex openai sessions coding harness /code /codex telegram monitor prompt resume fork headless exec stream-json jobs code_run code_sessions allowed roots permission mode sandbox" },
       { id: "settings", title: "Settings", icon: SettingsIcon, keywords: "engine versions update preferences config settings.json active model" },
       { id: "troubleshooting", title: "Troubleshooting", icon: WrenchIcon, keywords: "help problem model won't load download stuck gateway 401 mlx not installed reset support faq" },
     ],
@@ -591,6 +592,18 @@ export VW_DEFAULT_MODEL="local-qwen"`}</Pre>
         <>Chat-channel replies also appear under the agent's Activity; schedule results show their latest delivery status next to the schedule.</>,
       ]} />
       <P>Rows are kept for <Code>VW_DELIVERY_RETENTION_DAYS</Code> (90 by default) and pruned by the hourly maintenance loop. Nothing on this page sends anything; it only reads the log.</P>
+    </>
+  ),
+  harness: (
+    <>
+      <P>The <Term>coding harness</Term> lets a worker see the <Term>Claude Code</Term> and <Term>Codex</Term> sessions on this machine and send prompts into them, so you can check on a coding session and give it the next instruction from Telegram, WhatsApp, Discord or Slack. Both agents keep their state on disk (<Code>~/.claude</Code>: a live-session registry and transcripts; <Code>~/.codex/sessions</Code>: rollouts); Virtual Worker reads those (no daemon, nothing installed into either tool) and runs prompts headless, <Code>claude -p --resume</Code> or <Code>codex exec resume</Code>, as supervised subprocesses.</P>
+      <Steps items={[
+        <>Open <Term>Settings → Coding harness</Term>. It shows whether each binary was found, Claude Code's permission mode for runs (default: inherit its own), Codex's sandbox (default: workspace write), a turn cap, a timeout, and the <Term>allowed roots</Term> under which <em>new</em> sessions may start. Existing sessions can always be continued.</>,
+        <>In the worker's settings, turn on <Term>Guardrails → Integrations → Coding harness</Term>. The worker gains <Code>code_sessions</Code>, <Code>code_session</Code>, <Code>code_run</Code>, <Code>code_jobs</Code> and <Code>code_stop</Code>, and chats bound to it accept <Code>/code</Code>.</>,
+        <>From a chat: <Code>/code list</Code>, <Code>/code show &lt;name or id prefix&gt;</Code>, <Code>/code run &lt;ref&gt; &lt;prompt&gt;</Code>, <Code>/code new &lt;dir&gt; &lt;prompt&gt;</Code>, <Code>/code jobs</Code>, <Code>/code job &lt;id&gt;</Code>, <Code>/code stop &lt;id&gt;</Code>; the same with <Code>/codex</Code> for Codex. Or just ask the worker in plain language ("what is Claude doing on virtual-worker?", "ask codex to add tests for the parser").</>,
+      ]} />
+      <P>A run answers at once with a job id, posts a short progress line while it works (every 90 seconds by default, only when something happened; set to 0 in Settings for silence), and posts the agent's final reply into the same chat when it finishes, with turns, tool calls and (for Claude Code) cost. To send a follow-up into the same session, just <Term>reply</Term> to any of those messages with plain text; no command needed. A Claude Code session that is open in a terminal is <Term>forked</Term> rather than written to, so your interactive session is never corrupted; the reply names the new session id. Codex has no live-process registry, so Virtual Worker reads the process list instead: a session is shown as <Term>open</Term> while a <Code>codex</Code> process holds it (a resume of that id, or an interactive Codex in that project), and <Term>busy</Term> while a run started here is on it; open sessions are not written to. Runs are capped at three in parallel and are stopped when Virtual Worker shuts down.</P>
+      <Tip>Permissions matter. With Claude Code's default, a headless run that needs an approval it cannot ask for will stop and say so; set <Term>Accept edits</Term> for routine work. Codex runs inside its sandbox (<Term>Workspace write</Term> by default). Use the bypass or full-access options only on a sandboxed machine. The channel's own allow-list and pairing policy decide who may send prompts at all.</Tip>
     </>
   ),
   settings: (
