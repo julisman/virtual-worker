@@ -105,6 +105,18 @@ Use your own model server instead of the managed one:
 VW_UPSTREAM_URL=http://127.0.0.1:11434 ./dev.sh   # e.g. Ollama
 ```
 
+Run a worker without the UI:
+
+```bash
+./vw run "Personal Assistant" "summarize README.md in three bullets"
+```
+
+A quick tour once the wizard is done: chat with the worker and ask it to write a
+file in its working folder, then open **Debug** for the trace; rate a reply with
+the thumbs and find it under **Analytics → feedback**; add a schedule with a
+delivery target and watch **Deliveries**; turn on scheduled snapshots under
+**Settings → Backup**.
+
 ## Configuration
 
 All local state lives under `VW_HOME` (default `~/.virtual-worker`; `dev.sh` sets it to
@@ -181,8 +193,10 @@ cd frontend && npm run build
 The product plan lives in [`docs/PRD.md`](docs/PRD.md). Next milestones:
 
 1. Real-device validation of each channel and the first public release.
-2. Desktop packaging and signed builds.
-3. Evaluation suites and fine-tuning from feedback (deferred by the PRD).
+2. Desktop packaging and signed builds; Windows without WSL.
+3. Local voice (speech to text and text to speech) in Chat.
+4. Evaluation suites and fine-tuning from the feedback export.
+5. A browser recorder that turns a recorded flow into a skill.
 
 ## Contributing
 
