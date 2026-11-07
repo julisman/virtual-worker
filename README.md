@@ -53,7 +53,9 @@ MCP server, a remote upstream, or a connected chat channel.
   stored once, write-only.
 - **Browser tools**: self-hosted web search (SearXNG), headless page reading, and an
   interactive browser the agent can drive (open, click, type, screenshot) with a
-  persistent profile so logins stick.
+  persistent profile so logins stick. It can also attach to your own running Chrome,
+  where the small [companion extension](browser-extension/README.md) groups the
+  agent's tabs the way Claude in Chrome does.
 - **Knowledge wikis**: an agent-maintained wiki of cross-linked markdown pages, plus
   linked repository wikis, searchable with cited answers.
 - **Context compression**: large tool results are crushed to what matters, with the

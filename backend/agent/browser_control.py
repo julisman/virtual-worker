@@ -36,7 +36,7 @@ URL, Virtual Worker **falls back to launching its own browser** and prefixes the
 separate profiles/logins, so the agent must know which one it's in). Screen
 recording is a launch-time Playwright option, so it's unavailable whenever
 attach is configured. Tabs Virtual Worker creates are marked with
-``window.name = "vw-agent"``; when the Virtual Worker Recorder extension is installed in
+``window.name = "vw-agent"``; when the Virtual Worker Companion extension is installed in
 the attached Chrome, it gathers them into a colored "🦦 Virtual Worker" tab group
 (``chrome.tabGroups`` is extension-only — CDP cannot group tabs).
 
@@ -310,7 +310,7 @@ async def _get_context():
 
 
 # Tabs Virtual Worker creates carry this marker in window.name: it survives navigation
-# within the tab, and the Virtual Worker Recorder extension's content script sees it and
+# within the tab, and the Virtual Worker Companion extension's content script sees it and
 # moves the tab into a "🦦 Virtual Worker" tab group (chrome.tabGroups is extension-only —
 # CDP can't group tabs itself). Purely cosmetic if the extension isn't there.
 _AGENT_TAB_MARK = "vw-agent"
