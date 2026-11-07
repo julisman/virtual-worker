@@ -197,7 +197,7 @@ async def _send_email(target: str, text: str, subject: str | None) -> str:
 
 
 async def _send_chat(target: str, text: str, subject: str | None,
-                     agent_id: str | None, source: str) -> dict:
+                     agent_id: str | None, source: str, schedule_id: str | None = None) -> dict:
     """Send through a connected chat channel (WhatsApp, Telegram, …). ``target``
     is ``<accountId>:<conversation>`` (a phone number, chat id or group id); the
     channel manager audits the send itself, so its record is returned as-is."""
@@ -206,7 +206,8 @@ async def _send_chat(target: str, text: str, subject: str | None,
         raise RuntimeError("chat target must be '<accountId>:<phone-or-chat-id>'")
     account_id, conv = target.split(":", 1)
     body = f"*{subject}*\n\n{text}" if subject else text
-    return await manager.send(account_id.strip(), conv.strip(), body, agent_id=agent_id, source=source)
+    return await manager.send(account_id.strip(), conv.strip(), body, agent_id=agent_id, source=source,
+                              schedule_id=schedule_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -252,7 +253,7 @@ async def deliver(channel: str, target: str, text: str, *,
         elif channel == "webhook":
             await _send_webhook(target, text, subject, data, agent_id, source)
         elif channel == "chat":
-            return await _send_chat(target, text, subject, agent_id, source)
+            return await _send_chat(target, text, subject, agent_id, source, schedule_id)
         elif channel == "email":
             await _send_email(target, text, subject)
         elif channel == "obsidian":

@@ -34,6 +34,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -69,9 +70,11 @@ def to_jid(target: str) -> str:
     t = (target or "").strip().replace("+", "").replace(" ", "")
     if "@" in t:
         return t
-    if t.endswith("-group") or "-" in t:   # defensive: group ids are <num>-<ts>@g.us
-        return t.rstrip("-group") + "@g.us"
-    return f"{t}@s.whatsapp.net"
+    if t.endswith("-group"):
+        return f"{t[: -len('-group')]}@g.us"
+    if re.fullmatch(r"\d{5,}-\d{6,}", t):      # group ids are <creator-number>-<timestamp>
+        return f"{t}@g.us"
+    return f"{t.replace('-', '')}@s.whatsapp.net"   # dashes in a phone number are formatting
 
 
 def parse_bridge_message(account_id: str, ev: dict) -> InboundMessage:

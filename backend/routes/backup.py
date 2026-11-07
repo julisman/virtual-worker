@@ -35,8 +35,8 @@ async def info():
 @router.get("/export")
 async def export(includeModels: bool = False, redactSecrets: bool = True):
     try:
-        data, manifest = backup.export_backup(
-            include_models=includeModels, redact_secrets=redactSecrets
+        data, manifest = await asyncio.to_thread(
+            backup.export_backup, include_models=includeModels, redact_secrets=redactSecrets
         )
     except Exception as exc:  # noqa: BLE001 — surface a clean 500 to the UI
         logger.exception("backup export failed")
@@ -64,7 +64,7 @@ async def import_(file: UploadFile = File(...)):
     if not data:
         raise HTTPException(400, "empty file")
     try:
-        result = backup.import_backup(data)
+        result = await asyncio.to_thread(backup.import_backup, data)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

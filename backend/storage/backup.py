@@ -165,16 +165,15 @@ def _redact_settings(data: dict) -> tuple[dict, list[dict]]:
 # Export
 # --------------------------------------------------------------------------- #
 
-def export_backup(include_models: bool = False, redact_secrets: bool = True) -> tuple[bytes, dict]:
-    """Build a ``.vwbak`` archive of the current studio state.
-
-    Returns ``(archive_bytes, manifest)``. The HF cache is never included;
-    ``models/`` is included only when ``include_models`` is true.
-    """
+def write_backup(fh, include_models: bool = False, redact_secrets: bool = True) -> dict:
+    """Stream a ``.vwbak`` archive of the current studio state into ``fh`` (any
+    writable binary file object) and return the manifest. The HF cache is never
+    included; ``models/`` only when ``include_models`` is true. Writing to a
+    file keeps multi-GB model folders out of memory."""
     home = config.APP_HOME
     secrets_needed: list[dict] = []
     contents = {"app.db": False, "settings.json": False, "skills": 0, "models": 0}
-    buf = io.BytesIO()
+    buf = fh
 
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
@@ -230,7 +229,31 @@ def export_backup(include_models: bool = False, redact_secrets: bool = True) -> 
             }
             zf.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2))
 
+    return manifest
+
+
+def export_backup(include_models: bool = False, redact_secrets: bool = True) -> tuple[bytes, dict]:
+    """In-memory variant for the download route: ``(archive_bytes, manifest)``."""
+    buf = io.BytesIO()
+    manifest = write_backup(buf, include_models=include_models, redact_secrets=redact_secrets)
     return buf.getvalue(), manifest
+
+
+def export_backup_to(path: Path, include_models: bool = False, redact_secrets: bool = True) -> dict:
+    """Write the archive straight to ``path`` (via a ``.part`` file) and return the manifest."""
+    tmp = path.with_suffix(path.suffix + ".part")
+    try:
+        with open(tmp, "wb") as fh:
+            manifest = write_backup(fh, include_models=include_models, redact_secrets=redact_secrets)
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return manifest
 
 
 # --------------------------------------------------------------------------- #
@@ -246,10 +269,9 @@ def _pre_import_backup() -> Path | None:
     if not has_state:
         return None
     include_models = (home / "models").exists()
-    data, _ = export_backup(include_models=include_models, redact_secrets=False)
     backups = config.ensure_dir(home / "backups")
     path = backups / f"pre-import-{_ts()}.bak.vwbak"
-    path.write_bytes(data)
+    export_backup_to(path, include_models=include_models, redact_secrets=False)
     return path
 
 
@@ -470,17 +492,8 @@ def scheduled_backup_once(*, force: bool = False) -> dict:
     backups = config.ensure_dir(config.APP_HOME / "backups")
     path = backups / f"{SCHEDULED_PREFIX}{_ts()}.vwbak"
     try:
-        data, manifest = export_backup(
-            include_models=bool(sched["includeModels"]),
-            redact_secrets=bool(sched["redactSecrets"]),
-        )
-        tmp = path.with_suffix(".part")
-        tmp.write_bytes(data)
-        tmp.replace(path)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        manifest = export_backup_to(path, include_models=bool(sched["includeModels"]),
+                                    redact_secrets=bool(sched["redactSecrets"]))
     except Exception as exc:  # noqa: BLE001 — recorded for the UI, never raised
         logger.warning("scheduled backup failed: %s", exc)
         cfg = _backup_cfg()
@@ -493,8 +506,9 @@ def scheduled_backup_once(*, force: bool = False) -> dict:
     cfg.pop("lastScheduledError", None)
     _save_backup_cfg(cfg)
     pruned = prune_scheduled(int(sched["keep"]))
-    logger.info("scheduled backup written: %s (%d bytes, pruned %d)", path.name, len(data), pruned)
-    return {"ran": True, "file": path.name, "bytes": len(data), "pruned": pruned,
+    nbytes = path.stat().st_size
+    logger.info("scheduled backup written: %s (%d bytes, pruned %d)", path.name, nbytes, pruned)
+    return {"ran": True, "file": path.name, "bytes": nbytes, "pruned": pruned,
             "manifest": manifest}
 
 

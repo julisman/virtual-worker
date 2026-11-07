@@ -173,7 +173,16 @@ def _store_from_tokens(tokens: dict) -> dict:
 # Credential access (refresh on demand)
 # --------------------------------------------------------------------------- #
 
+_refresh_lock = threading.Lock()
+
+
 def _refresh() -> tuple[str | None, str | None]:
+    # Serialize: two concurrent runs must not both spend the refresh grant.
+    with _refresh_lock:
+        return _refresh_locked()
+
+
+def _refresh_locked() -> tuple[str | None, str | None]:
     blob = providers.get_oauth(PROVIDER)
     refresh = blob.get("refreshToken")
     if not refresh:

@@ -198,8 +198,9 @@ class TelegramAdapter(ChannelAdapter):
         async with self.client_factory() as c:
             if text:
                 body: dict = {"chat_id": chat_id, "text": text}
-                if reply_to and reply_to.isdigit():
-                    body["reply_parameters"] = {"message_id": int(reply_to), "allow_sending_without_reply": True}
+                mid = (reply_to or "").rsplit(":", 1)[-1]          # event ids are "<chat>:<message_id>"
+                if mid.isdigit():
+                    body["reply_parameters"] = {"message_id": int(mid), "allow_sending_without_reply": True}
                 r = await c.post(self._url("sendMessage"), json=body)
                 last = self._result_id(r)
             for a in attachments or []:

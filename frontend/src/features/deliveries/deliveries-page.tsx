@@ -35,6 +35,12 @@ const CHANNEL_LABEL: Record<string, string> = {
   chat: "Chat channel", obsidian: "Obsidian",
 };
 
+// Chat-channel rows are logged as `chat:<kind>` (chat:whatsapp, chat:telegram, …).
+function channelLabel(c: string): string {
+  if (c.startsWith("chat:")) return `Chat · ${c.slice(5)}`;
+  return CHANNEL_LABEL[c] || c;
+}
+
 function statusTone(s: string): string {
   if (s === "sent") return "bg-success-soft text-success";
   if (s === "dropped") return "bg-warn-soft text-warn";
@@ -218,7 +224,7 @@ function DeliveryRow({ d, isOpen, agentName, onToggle }: {
             {d.status}
           </span>
         </td>
-        <td className="px-3 py-2 text-xs text-ink">{CHANNEL_LABEL[d.channel] || d.channel}</td>
+        <td className="px-3 py-2 text-xs text-ink">{channelLabel(d.channel)}</td>
         <td className="max-w-[220px] truncate px-3 py-2 font-mono text-[11px] text-body" title={d.target || ""}>{d.target || "—"}</td>
         <td className="max-w-[140px] truncate px-3 py-2 text-xs text-body">{agentName || (d.agentId ? d.agentId.slice(0, 8) : "—")}</td>
         <td className="px-3 py-2 text-xs text-mute">{d.source}{d.scheduleId ? " · schedule" : ""}</td>

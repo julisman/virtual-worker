@@ -325,6 +325,7 @@ class ChannelManager:
                     session_override: str | None = None) -> None:
         cfg = acct["config"]
         session_id = session_override or msg.session_key
+        tools_used: list[str] = []
         cmd = (msg.text or "").strip().lower()
         if cmd in ("/reset", "/new"):
             chat_store.delete_session(session_id)
@@ -372,8 +373,10 @@ class ChannelManager:
                 ack_task = self._spawn(self._ack_later(acct["id"], msg, ack_after))
             timeout = float(cfg.get("runTimeoutS") or 0) or None
             try:
-                text, err = await asyncio.wait_for(
+                res = await asyncio.wait_for(
                     execute_turn(agent, messages, session_id), timeout=timeout)
+                text, err = res[0], res[1]
+                tools_used = list(res[2]) if len(res) > 2 else []   # stubs may return a pair
             except asyncio.TimeoutError:
                 text, err = "", "run timed out"
         finally:
@@ -400,10 +403,13 @@ class ChannelManager:
                                       agent_id=agent.get("id"),
                                       meta={"channel": acct["kind"], "sender": msg.sender_id,
                                             "senderName": msg.sender_name, "eventId": msg.event_id})
+            a_meta: dict = {"channel": acct["kind"]}
+            if err:
+                a_meta["error"] = err
+            if tools_used:
+                a_meta["toolsUsed"] = tools_used   # load_history marks tool-backed replies
             chat_store.append_message(session_id, "assistant", reply, title=title,
-                                      agent_id=agent.get("id"),
-                                      meta={"channel": acct["kind"], "error": err} if err else
-                                      {"channel": acct["kind"]})
+                                      agent_id=agent.get("id"), meta=a_meta)
         except Exception:  # noqa: BLE001
             logger.debug("channel session persist failed", exc_info=True)
 
@@ -479,60 +485,65 @@ class ChannelManager:
     # ------------------------------------------------------------------ #
     async def _send(self, account_id: str, target: str, text: str, *,
                     reply_to: str | None = None, agent_id: str | None = None,
-                    source: str = "reply", attachments: list[Attachment] | None = None) -> dict:
+                    source: str = "reply", attachments: list[Attachment] | None = None,
+                    schedule_id: str | None = None) -> dict:
         """Send via the account's adapter, chunked, and record one audit row."""
         adapter = self._adapters.get(account_id)
         acct = chat_channel_store.get_account(account_id)
         kind = (acct or {}).get("kind") or "chat"
+        log = dict(channel=f"chat:{kind}", target=target, source=source, agent_id=agent_id,
+                   schedule_id=schedule_id, payload_text=text)
         if adapter is None:
-            return channel_store.log_delivery(channel=f"chat:{kind}", target=target, source=source,
-                                              status="failed", agent_id=agent_id,
-                                              error="channel account is not running",
-                                              payload_text=text)
+            return channel_store.log_delivery(status="failed", error="channel account is not running", **log)
         try:
             chunks = base.split_text(text, adapter.max_text_len) or [""]
             last = ""
             for i, chunk in enumerate(chunks):
                 last = await adapter.send(target, chunk, reply_to=reply_to if i == 0 else None,
                                           attachments=attachments if i == len(chunks) - 1 else None)
-            return channel_store.log_delivery(channel=f"chat:{kind}", target=target, source=source,
-                                              status="sent", agent_id=agent_id, payload_text=text,
-                                              error=last[:200] if source == "test" else "")
+            rec = channel_store.log_delivery(status="sent", **log)
+            rec["messageId"] = last          # platform id of the last chunk (not persisted)
+            return rec
         except Exception as exc:  # noqa: BLE001
             logger.warning("channel send via %s failed: %s", kind, exc)
-            return channel_store.log_delivery(channel=f"chat:{kind}", target=target, source=source,
-                                              status="failed", agent_id=agent_id,
-                                              error=str(exc)[:500], payload_text=text)
+            return channel_store.log_delivery(status="failed", error=str(exc)[:500], **log)
 
     async def send(self, account_id: str, target: str, text: str, *,
                    agent_id: str | None = None, source: str = "tool",
-                   reply_to: str | None = None) -> dict:
+                   reply_to: str | None = None, schedule_id: str | None = None) -> dict:
         """Public proactive send (tools, deliveries, tests) with the self-send guard."""
         adapter = self._adapters.get(account_id)
+        acct = chat_channel_store.get_account(account_id)
+        kind = (acct or {}).get("kind") or "chat"
         if adapter and target in adapter.self_ids():
-            return channel_store.log_delivery(channel="chat", target=target, source=source,
-                                              status="dropped", agent_id=agent_id,
+            return channel_store.log_delivery(channel=f"chat:{kind}", target=target, source=source,
+                                              status="dropped", agent_id=agent_id, schedule_id=schedule_id,
                                               error="refused: target is the account itself",
                                               payload_text=text)
         return await self._send(account_id, target, text, reply_to=reply_to,
-                                agent_id=agent_id, source=source)
+                                agent_id=agent_id, source=source, schedule_id=schedule_id)
 
 
-async def execute_turn(agent: dict, messages: list[dict], session_id: str) -> tuple[str, str | None]:
+async def execute_turn(agent: dict, messages: list[dict], session_id: str) -> tuple[str, str | None, list[str]]:
     """Run a prepared conversation (history + the new user turn) through the
-    shared runner with the chat-app directive. Module-level so tests can
-    monkeypatch it (no model needed)."""
+    shared runner with the chat-app directive. Returns ``(text, error,
+    tools_used)``. Module-level so tests can monkeypatch it (no model needed);
+    a two-tuple from a stub is accepted."""
     from agent import runner
 
     text_parts: list[str] = []
     last_narration = ""
     err: str | None = None
+    tools_used: list[str] = []
     async for ev in runner.stream_run(agent, messages, session_id=session_id,
                                       extra_system=_CHANNEL_DIRECTIVE):
         t = ev.get("type")
         if t == "text":
             text_parts.append(ev.get("delta", ""))
         elif t == "tool_call":
+            name = ev.get("name")
+            if name and name not in tools_used:
+                tools_used.append(str(name))
             # Text streamed before a tool call is narration, not the answer —
             # keep only what follows the last tool call (stash as a fallback).
             if "".join(text_parts).strip():
@@ -541,7 +552,7 @@ async def execute_turn(agent: dict, messages: list[dict], session_id: str) -> tu
         elif t == "error":
             err = ev.get("message") or "run failed"
     final = "".join(text_parts).strip() or last_narration.strip()
-    return final, err
+    return final, err, tools_used
 
 
 manager = ChannelManager()

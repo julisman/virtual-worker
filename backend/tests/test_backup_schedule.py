@@ -95,7 +95,7 @@ def test_failure_recorded_not_raised(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_HOME", tmp_path)
     _seed(tmp_path)
     backup.set_schedule({"enabled": True})
-    monkeypatch.setattr(backup, "export_backup", lambda **kw: (_ for _ in ()).throw(RuntimeError("disk full")))
+    monkeypatch.setattr(backup, "write_backup", lambda fh, **kw: (_ for _ in ()).throw(RuntimeError("disk full")))
     res = backup.scheduled_backup_once()
     assert res["ran"] is False and "disk full" in res["error"]
     assert "disk full" in backup.get_schedule()["lastScheduledError"]

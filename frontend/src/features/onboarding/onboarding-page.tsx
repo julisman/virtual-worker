@@ -125,12 +125,17 @@ function ModelStep({ status, onReady }: { status: Status; onReady: (provider: { 
   const timer = useRef<number | null>(null);
 
   // Resolve the first recommendation that the hub can actually find and that fits.
+  const [skipped, setSkipped] = useState<string[]>([]);
   useEffect(() => {
     if (mode !== "download" || pick) return;
     let alive = true;
     (async () => {
       setResolving(true); setNote(null);
-      for (const rec of status.recommendations) {
+      // "Try another" moves past the recommendations already shown; when every
+      // preset has been skipped, start over from the first.
+      const candidates = status.recommendations.filter((r) => !skipped.includes(r.label));
+      const order = candidates.length ? candidates : status.recommendations;
+      for (const rec of order) {
         try {
           const d = await apiJson<{ models: DiscoverModel[] }>(`/api/hub/discover?q=${encodeURIComponent(rec.q)}&fmt=${rec.fmt}&fit_only=true&limit=8`);
           const m = d.models.find((x) => x.id.toLowerCase().includes(rec.q.toLowerCase()) && x.fits !== false) ?? d.models.find((x) => x.fits !== false);
@@ -149,7 +154,7 @@ function ModelStep({ status, onReady }: { status: Status; onReady: (provider: { 
       if (alive) { setResolving(false); }
     })();
     return () => { alive = false; };
-  }, [mode, status.recommendations, pick]);
+  }, [mode, status.recommendations, pick, skipped]);
 
   useEffect(() => {
     if (mode !== "existing") return;
@@ -260,7 +265,7 @@ function ModelStep({ status, onReady }: { status: Status; onReady: (provider: { 
               {activating && <p className="mt-3 text-xs text-body">Loading the model… this takes a minute the first time.</p>}
               <div className="mt-3 flex gap-2">
                 <button onClick={download} disabled={busy || activating} className={btnPrimary}>{busy ? "Downloading…" : activating ? "Loading…" : "Download and activate"}</button>
-                <button onClick={() => setPick(null)} disabled={busy || activating} className={btnGhost}>Try another</button>
+                <button onClick={() => { setSkipped((s) => s.length >= status.recommendations.length - 1 ? [] : [...s, pick.rec.label]); setPick(null); }} disabled={busy || activating} className={btnGhost}>Try another</button>
               </div>
             </div>
           )}

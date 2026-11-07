@@ -260,7 +260,9 @@ def list_deliveries(*, agent_id: str | None = None, schedule_id: str | None = No
         q += " AND agent_id=?"; args.append(agent_id)
     if schedule_id:
         q += " AND schedule_id=?"; args.append(schedule_id)
-    if channel:
+    if channel == "chat":                      # all chat channels: chat, chat:whatsapp, chat:telegram, …
+        q += " AND (channel=? OR channel LIKE 'chat:%')"; args.append(channel)
+    elif channel:
         q += " AND channel=?"; args.append(channel)
     if status:
         q += " AND status=?"; args.append(status)

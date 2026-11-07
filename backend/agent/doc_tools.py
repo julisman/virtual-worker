@@ -12,6 +12,8 @@ large documents instead of flooding the context.
 
 from __future__ import annotations
 
+import asyncio
+
 import csv
 import io
 import os
@@ -243,6 +245,40 @@ def extract_csv(path: Path, max_rows: int = MAX_ROWS_PER_SHEET) -> tuple[str, di
     return out, {"rows": len(rows), "columns": len(rows[0]) if rows else 0}
 
 
+def inspect(path: Path) -> dict:
+    """Structure only (page, sheet, slide counts, title) without extracting text."""
+    ext = path.suffix.lower()
+    if ext == ".pdf":
+        from pypdf import PdfReader
+        reader = PdfReader(str(path))
+        meta: dict = {"pages": len(reader.pages)}
+        try:
+            title = (reader.metadata or {}).get("/Title")
+            if title:
+                meta["title"] = str(title)
+        except Exception:  # noqa: BLE001
+            pass
+        return meta
+    if ext == ".xlsx":
+        with zipfile.ZipFile(path) as z:
+            return {"sheets": [n for n, _ in _xlsx_sheets(z)]}
+    if ext == ".pptx":
+        with zipfile.ZipFile(path) as z:
+            return {"slides": sum(1 for n in z.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", n))}
+    if ext == ".docx":
+        with zipfile.ZipFile(path) as z:
+            root = ET.fromstring(z.read("word/document.xml"))
+        body = root.find(f"{_W}body")
+        els = list(body if body is not None else root)
+        return {"paragraphs": sum(1 for e in els if e.tag == f"{_W}p" and _docx_para_text(e).strip()),
+                "tables": sum(1 for e in els if e.tag == f"{_W}tbl")}
+    if ext in (".csv", ".tsv"):
+        with open(path, "rb") as fh:
+            return {"rows": sum(1 for _ in fh)}
+    _, meta = extract(path, max_rows=1)
+    return {k: v for k, v in meta.items() if k != "pagesRead"}
+
+
 def extract_text(path: Path) -> tuple[str, dict]:
     text = path.read_text(encoding="utf-8", errors="replace")
     return text, {"lines": text.count("\n") + 1}
@@ -304,8 +340,7 @@ def make_doc_tools(roots: list[str | Path]) -> dict[str, dict]:
         info = {"name": p.name, "sizeBytes": p.stat().st_size, "type": p.suffix.lower().lstrip(".") or "unknown",
                 "supported": p.suffix.lower() in SUPPORTED}
         try:
-            _, meta = extract(p, max_rows=1)
-            info.update({k: v for k, v in meta.items() if k != "rows"} | ({"rows": meta["rows"]} if "rows" in meta else {}))
+            info.update(await asyncio.to_thread(inspect, p))
         except Exception as exc:  # noqa: BLE001
             info["note"] = f"could not inspect: {exc}"
         return "\n".join(f"{k}: {v}" for k, v in info.items())

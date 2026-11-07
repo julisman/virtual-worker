@@ -24,6 +24,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from config import db_path, ensure_dir
+from storage import _sqlite
 from storage import settings
 
 _lock = threading.Lock()
@@ -52,7 +53,7 @@ def _now() -> str:
 def _conn() -> sqlite3.Connection:
     p = db_path()
     ensure_dir(p.parent)
-    conn = sqlite3.connect(str(p))
+    conn = _sqlite.connect(str(p))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
@@ -100,6 +101,7 @@ def _conn() -> sqlite3.Connection:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_events_time ON chat_events(received_at)")
+    conn.mark_initialized()
     return conn
 
 
