@@ -6,6 +6,12 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Anthropic gateway: stop sending `temperature`/`top_p` to Claude 5.5 models
+  (Opus, Sonnet, Haiku 5.x), which reject them with "`temperature` is deprecated
+  for this model".
+
 ### Added
 
 - Social lead-gen skill pack (`skills/social/`, eight skills) and a Social Lead-Gen
