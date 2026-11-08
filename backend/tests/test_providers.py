@@ -404,8 +404,9 @@ def test_anthropic_request_sends_only_one_of_temperature_top_p():
 
 
 def test_anthropic_omits_sampling_for_models_that_reject_it():
-    # Opus 4.7/4.8 and Fable 5 removed temperature/top_p — sending any 400s.
-    for model in ("claude-opus-4-8", "claude-opus-4-7", "claude-fable-5"):
+    # Opus 4.7/4.8 and the Claude 5 family removed temperature/top_p — sending any 400s.
+    for model in ("claude-opus-4-8", "claude-opus-4-7", "claude-fable-5", "claude-fable-5-1",
+                  "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"):
         req = egress._to_anthropic_request(
             {"model": model, "messages": [], "temperature": 0.7, "top_p": 0.95}, {})
         assert "temperature" not in req and "top_p" not in req, model

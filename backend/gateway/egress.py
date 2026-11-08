@@ -274,8 +274,10 @@ def _image_block(url: str) -> dict:
 
 # Newer Anthropic models removed the sampling params — sending temperature/top_p/
 # top_k returns a 400 ("`temperature` is deprecated for this model."). Matched by
-# id substring so both bare ("claude-opus-4-8") and prefixed ids are caught.
-_ANTHROPIC_NO_SAMPLING = ("opus-4-8", "opus-4-7", "fable-5", "mythos-5")
+# id substring so both bare ("claude-opus-4-8") and prefixed ids are caught. The
+# whole Claude 5 family (Fable, Opus, Sonnet, Haiku 5.x) rejects them.
+_ANTHROPIC_NO_SAMPLING = ("opus-4-8", "opus-4-7", "fable-5", "mythos-5",
+                          "opus-5", "sonnet-5", "haiku-5")
 
 
 def _anthropic_rejects_sampling(model: str | None) -> bool:
@@ -407,7 +409,7 @@ def _to_anthropic_request(payload: dict, target: dict) -> dict:
     apply_effort = bool(effort) and _anthropic_supports_effort(payload.get("model"))
     if apply_effort:
         req["output_config"] = {"effort": effort}
-    # Sampling params: newer models (Opus 4.7/4.8, Fable 5) reject temperature/top_p
+    # Sampling params: newer models (Opus 4.7/4.8, Claude 5 family) reject temperature/top_p
     # outright (400); the rest accept at most ONE of temperature or top_p, never both.
     if not apply_effort and not _anthropic_rejects_sampling(payload.get("model")):
         if payload.get("temperature") is not None:
