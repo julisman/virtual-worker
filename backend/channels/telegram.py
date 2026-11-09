@@ -8,8 +8,10 @@ replies to one of its messages (Telegram's privacy mode hides other messages
 unless the bot is an admin).
 
 Media (photos, documents, voice, audio, video) is downloaded via ``getFile``
-into the account's media dir, subject to the size cap. Replies are plain text
-(no parse_mode) so model output can never break Telegram's markup rules.
+into the account's media dir, subject to the size cap. Replies are the model's
+Markdown converted to Telegram HTML (``channels.formatting.to_telegram_html``,
+``parse_mode=HTML``); if Telegram still rejects the markup, the same reply is
+resent as plain text so a formatting slip never loses a message.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import httpx
 
 from channels import base
 from channels.base import Attachment, ChannelAdapter, InboundMessage, registry
+from channels.formatting import to_telegram_html
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +97,7 @@ class TelegramAdapter(ChannelAdapter):
     config_fields: list[dict] = []
     secret_fields = [{"key": "botToken", "label": "Bot token (from @BotFather)"}]
     capabilities = {"media": True, "typing": True, "groups": True, "threads": False,
-                    "pairing": False, "webhook": False, "markdown": False}
+                    "pairing": False, "webhook": False, "markdown": "html"}
     max_text_len = 4000
 
     #: Test seam: a factory returning an ``httpx.AsyncClient``.
@@ -197,11 +200,15 @@ class TelegramAdapter(ChannelAdapter):
         last = "sent"
         async with self.client_factory() as c:
             if text:
-                body: dict = {"chat_id": chat_id, "text": text}
+                body: dict = {"chat_id": chat_id, "text": to_telegram_html(text), "parse_mode": "HTML"}
                 mid = (reply_to or "").rsplit(":", 1)[-1]          # event ids are "<chat>:<message_id>"
                 if mid.isdigit():
                     body["reply_parameters"] = {"message_id": int(mid), "allow_sending_without_reply": True}
                 r = await c.post(self._url("sendMessage"), json=body)
+                if r.status_code == 400 and "parse entities" in r.text.lower():
+                    body.pop("parse_mode")                         # markup rejected: send it plain
+                    body["text"] = text
+                    r = await c.post(self._url("sendMessage"), json=body)
                 last = self._result_id(r)
             for a in attachments or []:
                 method, field = ("sendPhoto", "photo") if a.kind == "image" else ("sendDocument", "document")

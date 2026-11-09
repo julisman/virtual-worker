@@ -43,6 +43,7 @@ def test_round_trip_over_mock_transport(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_HOME", tmp_path)
     calls: list[tuple[str, dict]] = []
     polls = {"n": 0}
+    reject = {"on": False}
 
     def handler(request: httpx.Request) -> httpx.Response:
         method = request.url.path.rsplit("/", 1)[-1]
@@ -69,6 +70,8 @@ def test_round_trip_over_mock_transport(tmp_path, monkeypatch):
             return httpx.Response(200, json={"ok": True, "result": []})
         if method == "getFile":
             return httpx.Response(200, json={"ok": True, "result": {"file_path": "photos/f1.jpg"}})
+        if method == "sendMessage" and reject["on"] and body.get("parse_mode"):
+            return httpx.Response(400, json={"ok": False, "description": "Bad Request: can't parse entities"})
         if method in ("sendMessage", "sendPhoto", "sendDocument"):
             return httpx.Response(200, json={"ok": True, "result": {"message_id": 77}})
         if method == "sendChatAction":
@@ -105,6 +108,15 @@ def test_round_trip_over_mock_transport(tmp_path, monkeypatch):
         assert mid == "77"
         sm = [c for c in calls if c[0] == "sendMessage"][-1][1]
         assert sm["chat_id"] == "12345" and sm["reply_parameters"]["message_id"] == 7
+        assert sm["parse_mode"] == "HTML"
+        await ad.send("12345", "**Halo** Kak")
+        assert [c for c in calls if c[0] == "sendMessage"][-1][1]["text"] == "<b>Halo</b> Kak"
+        # Telegram rejects the markup → resent once as plain text, nothing lost.
+        reject["on"] = True
+        assert await ad.send("12345", "**x**") == "77"
+        last = [c for c in calls if c[0] == "sendMessage"][-1][1]
+        assert last["text"] == "**x**" and "parse_mode" not in last
+        reject["on"] = False
         f = tmp_path / "doc.txt"; f.write_text("x")
         await ad.send("12345", "", attachments=[Attachment(path=str(f), kind="document", name="doc.txt")])
         assert [c for c in calls if c[0] == "sendDocument"]
