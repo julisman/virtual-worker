@@ -24,6 +24,7 @@ from pathlib import Path
 import httpx
 
 from channels.base import Attachment, ChannelAdapter, InboundMessage, registry
+from channels.formatting import to_whatsapp
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +202,7 @@ class WhatsAppCloudAdapter(ChannelAdapter):
         async with httpx.AsyncClient(timeout=30) as c:
             if text:
                 body: dict = {"messaging_product": "whatsapp", "recipient_type": "individual",
-                              "to": to, "type": "text", "text": {"preview_url": False, "body": text}}
+                              "to": to, "type": "text", "text": {"preview_url": False, "body": to_whatsapp(text)}}
                 if reply_to:
                     body["context"] = {"message_id": reply_to}
                 r = await c.post(f"{self._api()}/messages", json=body, headers=self._headers())

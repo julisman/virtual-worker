@@ -8,6 +8,12 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Fixed
 
+- Telegram: replies render Markdown (bold, italic, headings, bullets, links, code)
+  instead of showing raw `**` markers. Converted to Telegram HTML; if Telegram rejects
+  the markup the reply is resent as plain text.
+- WhatsApp (linked and Cloud): Markdown `**bold**`, `__bold__`, `~~strike~~`, headings
+  and `[text](url)` links are converted to WhatsApp markup; native `*bold*` / `_italic_`
+  is left as written.
 - Anthropic gateway: stop sending `temperature`/`top_p` to Claude 5.5 models
   (Opus, Sonnet, Haiku 5.x), which reject them with "`temperature` is deprecated
   for this model".

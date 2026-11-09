@@ -105,3 +105,39 @@ def test_channels_api_masks_secrets(tmp_path, monkeypatch):
         r = c.post(f"/api/channels/accounts/{acct['id']}/bindings", json={"conversationId": "628111", "agentId": "missing"})
         assert r.status_code == 400
         assert c.delete(f"/api/channels/accounts/{acct['id']}").json()["ok"] is True
+
+
+def test_send_converts_markdown_to_whatsapp_markup(tmp_path, monkeypatch):
+    import asyncio as _asyncio
+
+    import httpx as _httpx
+
+    from channels.whatsapp import cloud as _cloud, linked as _linked
+
+    sent: list[dict] = []
+
+    async def fake_command(cmd, wait=True):
+        sent.append(cmd)
+        return "OUT"
+
+    la = _linked.WhatsAppLinkedAdapter({"id": "a", "kind": "whatsapp", "config": {}}, {},
+                                       on_inbound=lambda m: _asyncio.sleep(0), data_dir=str(tmp_path))
+    la._status["state"] = "open"
+    monkeypatch.setattr(la, "_command", fake_command)
+    _asyncio.run(la.send("628111", "**Halo** Kak"))
+    assert sent[-1]["text"] == "*Halo* Kak"
+
+    bodies: list[dict] = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return _httpx.Response(200, json={"messages": [{"id": "wamid.1"}]})
+
+    real_client = _httpx.AsyncClient
+    monkeypatch.setattr(_cloud.httpx, "AsyncClient",
+                        lambda **kw: real_client(transport=_httpx.MockTransport(handler)))
+    ca = _cloud.WhatsAppCloudAdapter({"id": "c", "kind": "whatsapp_cloud",
+                                      "config": {"phoneNumberId": "1"}}, {"accessToken": "t"},
+                                     on_inbound=lambda m: _asyncio.sleep(0), data_dir=str(tmp_path))
+    assert _asyncio.run(ca.send("628111", "## Info\n**KTP**")) == "wamid.1"
+    assert bodies[-1]["text"]["body"] == "*Info*\n*KTP*"

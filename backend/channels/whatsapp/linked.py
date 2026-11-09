@@ -41,6 +41,7 @@ from pathlib import Path
 
 from channels import base
 from channels.base import Attachment, ChannelAdapter, InboundMessage, registry
+from channels.formatting import to_whatsapp
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +273,7 @@ class WhatsAppLinkedAdapter(ChannelAdapter):
         jid = to_jid(target)
         last = "sent"
         if text:
-            cmd = {"type": "send", "to": jid, "text": text, "replyTo": reply_to}
+            cmd = {"type": "send", "to": jid, "text": to_whatsapp(text), "replyTo": reply_to}
             if reply_to and reply_to in self._keys:
                 cmd["quotedKey"] = self._keys[reply_to]
             last = await self._command(cmd)
