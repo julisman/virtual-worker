@@ -153,6 +153,7 @@ function stepVerb(name: string): string {
   if (name === "browser_network_requests") return "Reading network";
   if (name === "browser_tabs") return "Listing tabs";
   if (name === "browser_tab_select") return "Switching tab";
+  if (name === "browser_tab_close") return "Closing tab";
   if (name === "load_skill") return "Loading skill";
   if (name === "load_skill_resource") return "Loading resource";
   if (name.startsWith("mcp__")) return "MCP: " + name.slice(5).replace("__", " · ");

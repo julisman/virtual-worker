@@ -251,12 +251,12 @@ const BROWSER_CONTROL_TOOLS = [
   "browser_open", "browser_snapshot", "browser_click", "browser_click_selector",
   "browser_type", "browser_press", "browser_back", "browser_read", "browser_evaluate",
   "browser_console_messages", "browser_network_requests",
-  "browser_tabs", "browser_tab_select",
+  "browser_tabs", "browser_tab_select", "browser_tab_close",
 ] as const;
 const BROWSER_GROUP_HINT =
   "Drive a real, visible browser that stays logged in: open pages (in tabs), scan "
   + "clickable elements, click (by ref or CSS/XPath selector), type, press keys, go "
-  + "back, switch tabs, read the page, run JavaScript for custom controls, and "
+  + "back, switch and close tabs, read the page, run JavaScript for custom controls, and "
   + "inspect the page's console output and network requests (DevTools-style). Can "
   + "attach to your own Chrome via VW_BROWSER_CDP_URL. Enables all of: "
   + BROWSER_CONTROL_TOOLS.join(", ");

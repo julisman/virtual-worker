@@ -82,6 +82,9 @@ Every social skill uses one script. Make sure it is in the working folder:
 - Never click anything that opens a native dialog (delete, block, report, discard).
 - If a page will not load or an element will not respond after two or three attempts,
   stop and report. Do not keep hammering it.
+- Keep tabs tidy: reuse a platform's tab instead of opening a new one per search, close a
+  tab with `browser_tab_close` once you are done with it, and end every run with
+  `browser_tab_close({"others": true})` so one working tab remains.
 
 ## Setup, once per brand
 

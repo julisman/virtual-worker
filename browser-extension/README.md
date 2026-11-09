@@ -41,7 +41,8 @@ is not needed.
 From then on, every tab an agent opens with `browser_open` appears in the blue
 **Virtual Worker** group next to your tabs. Agents never take over one of your
 tabs on their own; ask them to work in one and they can switch to it with
-`browser_tab_select`.
+`browser_tab_select`. They can close their own tabs with `browser_tab_close`,
+but never one of yours.
 
 ## Updating
 
