@@ -218,6 +218,7 @@ else to set up.
 4. Ask a worker to open a page. Its tabs appear in a blue **Virtual Worker** tab group
    next to yours. Agents never take over one of your tabs on their own; tell one to work
    in a tab you have open and it switches there with `browser_tab_select`.
+   `browser_tab_close` lets an agent tidy up its own tabs; it never closes yours.
 
 If nothing is listening on the CDP URL, Virtual Worker falls back to launching its own
 browser and says so in the tool result, since the two browsers have separate logins.

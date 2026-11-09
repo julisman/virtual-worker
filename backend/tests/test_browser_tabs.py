@@ -40,6 +40,12 @@ class FakePage:
     async def wait_for_load_state(self, *_a, **_kw):
         pass
 
+    async def close(self):
+        self._closed = True
+
+    async def opener(self):
+        return getattr(self, "_opener", None)
+
 
 class FakeCtx:
     def __init__(self, pages=None):
@@ -52,12 +58,17 @@ class FakeCtx:
 
 
 def run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch):
     monkeypatch.setattr(bc, "_current_page", None)
+    monkeypatch.setattr(bc, "_agent_pages", [])
     monkeypatch.setattr(bc, "_cdp", None)
     monkeypatch.setattr(bc, "_attach_note", "")
     monkeypatch.setattr(bc, "_available", lambda: True)
@@ -268,3 +279,64 @@ def test_tools_registered():
     from agent import tools
     assert "browser_tabs" in tools.TOOLS
     assert "browser_tab_select" in tools.TOOLS
+
+
+# ------------------------------------------------------------- tab close ----
+
+def test_tab_close_current_launched_mode(monkeypatch):
+    a, b = FakePage(title="A"), FakePage(title="B")
+    use_ctx(monkeypatch, FakeCtx([a, b]))
+    bc._current_page = b
+    out = run(bc.browser_tab_close())
+    assert b.is_closed() and not a.is_closed()
+    assert "Closed 1 tab" in out and bc._current_page is a
+
+
+def test_tab_close_by_index_and_out_of_range(monkeypatch):
+    a, b, c = FakePage(title="A"), FakePage(title="B"), FakePage(title="C")
+    use_ctx(monkeypatch, FakeCtx([a, b, c]))
+    bc._current_page = c
+    run(bc.browser_tab_close(2))
+    assert b.is_closed() and bc._current_page is c
+    assert "out of range" in run(bc.browser_tab_close(9))
+
+
+def test_tab_close_others_keeps_current(monkeypatch):
+    pages = [FakePage(title=str(n)) for n in range(5)]
+    use_ctx(monkeypatch, FakeCtx(pages))
+    bc._current_page = pages[2]
+    out = run(bc.browser_tab_close(others=True))
+    assert [p.is_closed() for p in pages] == [True, True, False, True, True]
+    assert "Closed 4 tab" in out
+
+
+def test_tab_close_last_tab_is_blanked_not_closed(monkeypatch):
+    only = FakePage(title="Only")
+    use_ctx(monkeypatch, FakeCtx([only]))
+    bc._current_page = only
+    out = run(bc.browser_tab_close())
+    assert not only.is_closed() and only.url == "about:blank" and "Blanked" in out
+
+
+def test_tab_close_attach_never_closes_user_tabs(monkeypatch):
+    monkeypatch.setattr(bc, "_cdp", object())          # attached to the user's Chrome
+    user = FakePage(url="https://mail.test/", title="Mail")
+    ctx = FakeCtx([user])
+    use_ctx(monkeypatch, ctx)
+    run(bc.browser_open("https://a.test/"))             # agent tab
+    agent_tab = bc._current_page
+    popup = FakePage(url="https://login.test/", title="Login")
+    popup._opener = agent_tab                           # opened by the agent's tab
+    ctx.pages.append(popup)
+    out = run(bc.browser_tab_close(1))                  # [1] is the user's tab
+    assert "user's own tabs" in out and not user.is_closed()
+    run(bc.browser_tab_close(others=True))              # closes the popup only
+    assert popup.is_closed() and not user.is_closed() and not agent_tab.is_closed()
+    run(bc.browser_tab_close())                         # its own working tab
+    assert agent_tab.is_closed() and not user.is_closed() and bc._current_page is None
+
+
+def test_tab_close_registered():
+    from agent import tools
+    assert "browser_tab_close" in tools.TOOLS
+    assert "browser_tab_close" in bc.CONTROL_TOOL_NAMES

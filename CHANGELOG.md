@@ -20,6 +20,11 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Added
 
+- `browser_tab_close` browser tool: an agent can close its current tab, a tab by index,
+  or all its other tabs, so tabs no longer pile up. In attach mode it only closes tabs the
+  agent opened (or popups they spawned), never the user's; the last tab is blanked rather
+  than closing the browser. Added to the browser tool chip and the Social Lead-Gen template;
+  the social skills now close their tabs at the end of a run.
 - Social lead-gen skill pack (`skills/social/`, eight skills) and a Social Lead-Gen
   worker template: prospecting, budgeted public replies, DM and comment triage with
   WhatsApp hand-off, health checks, insight research and watchlists, driven by the

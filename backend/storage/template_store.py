@@ -316,7 +316,7 @@ BUILTIN_TEMPLATES: list[dict] = [
         "topK": 64,
         "tools": ["browser_search", "browser_fetch", "browser_open", "browser_snapshot", "browser_click",
                   "browser_click_selector", "browser_type", "browser_read", "browser_press", "browser_back",
-                  "browser_tabs", "browser_tab_select", "browser_screenshot"],
+                  "browser_tabs", "browser_tab_select", "browser_tab_close", "browser_screenshot"],
         "skills": ["social-core", "social-prospect", "social-engage", "social-dm", "social-comments",
                    "social-health", "social-insight", "social-watch"],
         "guardrails": {"shell": "workspace", "verify": True, "maxIterations": 14, "dailyCap": 120,

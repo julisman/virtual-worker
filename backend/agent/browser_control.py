@@ -27,7 +27,8 @@ tools drive **your own running Chrome** over CDP instead of launching a separate
 one. Agent tabs open alongside yours in the same window; ``browser_tabs`` /
 ``browser_tab_select`` list and switch tabs (including yours, when you ask the
 agent to work in one); the agent never steals a user tab on its own — with no
-working tab it opens a new one. Virtual Worker never closes an attached browser: shutdown
+working tab it opens a new one. ``browser_tab_close`` closes only tabs the agent
+opened (or popups they spawned), never one of yours. Virtual Worker never closes an attached browser: shutdown
 and the "close" route just disconnect. Chrome must be started with
 ``--remote-debugging-port`` and a dedicated ``--user-data-dir`` (Chrome 136+
 ignores the flag on the default profile). If nothing is listening at the CDP
@@ -82,6 +83,7 @@ _pw = None                  # the Playwright driver
 _ctx = None                 # the shared persistent BrowserContext
 _cdp = None                 # the connected Browser handle in attach mode (CDP)
 _current_page = None        # the tab the agent is working in (survives tool calls)
+_agent_pages: list = []     # tabs the agent opened; in attach mode the only ones it may close
 _lock = asyncio.Lock()
 _record_dir: Path | None = None   # when set, contexts launch with video recording on
 _REC_SIZE = {"width": 1280, "height": 720}
@@ -323,10 +325,45 @@ async def _mark_agent_tab(page) -> None:
         pass
 
 
+def _remember_agent_tab(page) -> None:
+    """Record a tab as the agent's own (so browser_tab_close may close it in attach mode)."""
+    global _agent_pages
+    _agent_pages = [p for p in _agent_pages if not _safe_closed(p)]
+    if not any(p is page for p in _agent_pages):
+        _agent_pages.append(page)
+
+
+def _safe_closed(page) -> bool:
+    try:
+        return page.is_closed()
+    except Exception:                    # noqa: BLE001 — stale handle counts as closed
+        return True
+
+
+async def _is_agent_tab(page) -> bool:
+    """Whether the agent may close this tab. Launched mode: every tab (it is the
+    agent's own browser). Attach mode: only tabs it opened, or popups those tabs
+    opened (target=_blank links, OAuth windows); never one of the user's tabs."""
+    if not _attached():
+        return True
+    p, hops = page, 0
+    while p is not None and hops < 10:
+        if any(p is a for a in _agent_pages):
+            return True
+        try:
+            opener = getattr(p, "opener", None)
+            p = await opener() if opener else None
+        except Exception:                # noqa: BLE001
+            p = None
+        hops += 1
+    return False
+
+
 async def _new_agent_tab(ctx):
     """Open a new tab and mark it as Virtual Worker's (for extension tab-grouping)."""
     page = await ctx.new_page()
     await _mark_agent_tab(page)
+    _remember_agent_tab(page)
     return page
 
 
@@ -568,6 +605,7 @@ async def browser_open(url: str = "", new_tab: bool = False) -> str:
         if blank is not None:
             _current_page = blank
             await _mark_agent_tab(blank)
+            _remember_agent_tab(blank)
             note = "Opened the page."
         else:
             _current_page = await _new_agent_tab(ctx)
@@ -783,7 +821,8 @@ async def browser_tabs() -> str:
             lines.append(f"[{i}] {head}{p.url}{mark}")
         return (f"Open tabs ({len(pages)}):\n" + "\n".join(lines)
                 + "\n\nUse browser_tab_select(index) to switch tabs; "
-                  "browser_open(url, new_tab=true) opens another tab.")
+                  "browser_open(url, new_tab=true) opens another tab; "
+                  "browser_tab_close closes tabs you are done with.")
     except Exception as exc:             # noqa: BLE001
         return "browser_tabs failed: " + _launch_hint(exc)
 
@@ -811,6 +850,74 @@ async def browser_tab_select(index: int = 0) -> str:
         return f"Switched to tab [{i}].\n\n" + await _snapshot_block(_current_page)
     except Exception as exc:             # noqa: BLE001
         return "browser_tab_select failed: " + _launch_hint(exc)
+
+
+async def browser_tab_close(index: int = 0, others: bool = False) -> str:
+    """Close the agent's current tab (index 0), the [index] tab from browser_tabs,
+    or with ``others`` every agent tab except the current one. In attach mode the
+    user's own tabs are never closed. The browser itself always stays open: the
+    last remaining tab is blanked instead of closed."""
+    global _current_page
+    if not _available():
+        return _needs_browser()
+    try:
+        i = int(index or 0)
+    except (TypeError, ValueError):
+        return "browser_tab_close needs a numeric 'index' from browser_tabs (or 0 for the current tab)."
+    try:
+        ctx = await _get_context()
+        pages = [p for p in ctx.pages if not _safe_closed(p)]
+        if not pages:
+            return "No tabs open."
+        cur = _current_page if _current_page in pages else None
+
+        if others:
+            keep = cur or pages[-1]
+            targets = [p for p in pages if p is not keep and await _is_agent_tab(p)]
+            if not targets:
+                return "Nothing to close: no other agent tabs are open.\n\n" + await browser_tabs()
+        else:
+            if i == 0:
+                if cur is None:
+                    return "No current agent tab to close; pass an index from browser_tabs."
+                target = cur
+            elif 1 <= i <= len(pages):
+                target = pages[i - 1]
+            else:
+                return (f"browser_tab_close: index {i} is out of range — "
+                        f"{len(pages)} tab(s) open; call browser_tabs for the list.")
+            if not await _is_agent_tab(target):
+                return ("browser_tab_close: that is one of the user's own tabs. Virtual Worker "
+                        "only closes tabs it opened.")
+            targets = [target]
+
+        closed = blanked = 0
+        for p in targets:
+            remaining = [q for q in ctx.pages if not _safe_closed(q)]
+            if len(remaining) <= 1:      # never close the window: blank the last tab
+                try:
+                    await p.goto("about:blank")
+                    blanked += 1
+                except Exception:        # noqa: BLE001
+                    pass
+                continue
+            try:
+                await p.close()
+                closed += 1
+            except Exception:            # noqa: BLE001 — already gone
+                pass
+
+        left = [p for p in ctx.pages if not _safe_closed(p)]
+        if _current_page is None or _current_page not in left:
+            agent_left = [p for p in left if any(p is a for a in _agent_pages)]
+            if _attached():
+                _current_page = agent_left[-1] if agent_left else None
+            else:
+                _current_page = left[-1] if left else None
+        note = f"Closed {closed} tab(s)." + (" Blanked the last tab (the browser stays open)." if blanked else "")
+        return note + "\n\n" + await browser_tabs()
+    except Exception as exc:             # noqa: BLE001
+        return "browser_tab_close failed: " + _launch_hint(exc)
 
 
 # In-page wrapper for browser_evaluate. Indirect eval covers expressions AND
@@ -1154,7 +1261,7 @@ def _fn_schema(name: str, description: str, properties: dict, required: list[str
 CONTROL_TOOL_NAMES: frozenset[str] = frozenset({
     "browser_open", "browser_snapshot", "browser_click", "browser_click_selector",
     "browser_type", "browser_read", "browser_press", "browser_back",
-    "browser_tabs", "browser_tab_select", "browser_evaluate",
+    "browser_tabs", "browser_tab_select", "browser_tab_close", "browser_evaluate",
     "browser_console_messages", "browser_network_requests",
     "browser_screenshot", "browser_record_start", "browser_record_stop",
 })
@@ -1207,6 +1314,23 @@ def make_browser_tools() -> dict[str, dict]:
                 {"index": {"type": "integer",
                            "description": "the [n] tab index from browser_tabs"}},
                 ["index"]),
+        },
+        "browser_tab_close": {
+            "fn": browser_tab_close,
+            "kind": "browser",
+            "schema": _fn_schema(
+                "browser_tab_close",
+                "Close browser tabs you are done with, so tabs don't pile up. With no "
+                "arguments closes your current tab; index closes the [n] tab from "
+                "browser_tabs; others=true closes every tab you opened except the current "
+                "one (good housekeeping at the end of a task). Only tabs the agent opened "
+                "are ever closed — never the user's own tabs — and the browser itself "
+                "stays open. Returns the remaining tab list.",
+                {"index": {"type": "integer",
+                           "description": "the [n] tab index from browser_tabs; 0 or omitted = current tab"},
+                 "others": {"type": "boolean",
+                            "description": "close all agent tabs except the current one (default false)"}},
+                []),
         },
         "browser_snapshot": {
             "fn": browser_snapshot,
