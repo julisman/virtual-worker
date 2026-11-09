@@ -2,7 +2,7 @@
 
     vw start [--port 8888] [--home ~/.virtual-worker]   detach, auto-restart, built UI
     vw stop                                              stop the service (+ managed model server)
-    vw restart
+    vw restart                                           rebuild the UI if its source changed, then restart
     vw status                                            pid, health, ports, uptime
     vw logs [-n 200] [-f]                                service log
     vw run <agent> "<prompt>" [--session id] [--json]    headless one-shot run via the API
@@ -16,6 +16,11 @@ keeps running after the terminal closes. The supervisor restarts the backend
 with exponential backoff if it exits, and is itself detached in its own session
 with a pid file under ``<VW_HOME>/service.json``. ``./dev.sh`` (hot reload, Vite)
 uses separate default ports so both can run side by side.
+
+``start`` and ``restart`` rebuild ``frontend/dist`` when the frontend source is
+newer than the last build (e.g. after ``git pull``); ``restart`` builds before
+stopping the old service, so the app stays up during the build. A failed rebuild
+keeps serving the previous build. ``--no-build`` skips the check.
 """
 
 from __future__ import annotations
@@ -88,6 +93,62 @@ def _ui_built() -> bool:
     return (ROOT / "frontend" / "dist" / "index.html").exists()
 
 
+# What a frontend build depends on: if any of it is newer than dist/index.html
+# (rewritten on every Vite build), the served UI is stale.
+_UI_SOURCES = ("src", "public", "index.html", "package.json", "package-lock.json",
+               "vite.config.ts", "vite.config.js", "tsconfig.json", "tsconfig.app.json",
+               "tsconfig.node.json")
+
+
+def _newest_mtime(path: Path) -> float:
+    if not path.exists():
+        return 0.0
+    if path.is_file():
+        return path.stat().st_mtime
+    newest = 0.0
+    for p in path.rglob("*"):
+        try:
+            if p.is_file():
+                newest = max(newest, p.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def ui_stale(frontend: Path | None = None) -> bool:
+    """Whether the built UI is missing or older than any frontend source file."""
+    fe = frontend or (ROOT / "frontend")
+    index = fe / "dist" / "index.html"
+    if not index.exists():
+        return True
+    built = index.stat().st_mtime
+    return any(_newest_mtime(fe / name) > built for name in _UI_SOURCES)
+
+
+def ensure_ui(frontend: Path | None = None) -> bool:
+    """Build the UI when it is missing or stale. Returns False only when there is
+    no usable build at all; a failed REbuild keeps serving the previous one."""
+    fe = frontend or (ROOT / "frontend")
+    if not ui_stale(fe):
+        return True
+    had_build = (fe / "dist" / "index.html").exists()
+    print("building the frontend " + ("(source changed)…" if had_build else "(first run)…"), flush=True)
+    try:
+        r = subprocess.run(["npm", "run", "build"], cwd=fe)
+        ok = r.returncode == 0
+    except OSError as exc:            # npm missing
+        print(f"could not run npm: {exc}", file=sys.stderr)
+        ok = False
+    if ok:
+        return True
+    if had_build:
+        print("frontend build failed — still serving the previous build (fix it and run vw restart)",
+              file=sys.stderr)
+        return True
+    print("frontend build failed — fix it, or run with the dev launcher", file=sys.stderr)
+    return False
+
+
 # --------------------------------------------------------------------------- #
 # commands
 # --------------------------------------------------------------------------- #
@@ -98,12 +159,12 @@ def cmd_start(args) -> int:
     if st and pid_alive(st.get("pid")):
         print(f"already running (pid {st['pid']}) on http://127.0.0.1:{st.get('port')}")
         return 0
-    if not _ui_built():
-        print("building the frontend (first run)…")
-        r = subprocess.run(["npm", "run", "build"], cwd=ROOT / "frontend")
-        if r.returncode != 0:
-            print("frontend build failed — fix it, or run with the dev launcher", file=sys.stderr)
+    if getattr(args, "no_build", False):
+        if not _ui_built():
+            print("no built UI yet — run without --no-build once", file=sys.stderr)
             return 1
+    elif not ensure_ui():
+        return 1
     log = open(_log_file(home), "ab")
     env = {**os.environ, "VW_HOME": str(home), "VW_SERVE_UI": "1",
            "LLAMA_PORT": str(args.llama_port)}
@@ -428,6 +489,9 @@ def main(argv: list[str] | None = None) -> int:
         p = subs[name] = sub.add_parser(name)
         p.add_argument("--port", type=int, default=DEFAULT_PORT)
         p.add_argument("--llama-port", type=int, default=DEFAULT_LLAMA_PORT)
+    for name in ("start", "restart"):
+        subs[name].add_argument("--no-build", action="store_true",
+                                help="don't rebuild the UI even if its source changed")
     p = subs["stop"] = sub.add_parser("stop")
     p.add_argument("--keep-model", action="store_true", help="leave the managed model server running")
     p = subs["logs"] = sub.add_parser("logs")
@@ -454,7 +518,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "stop":
         return cmd_stop(args)
     if args.cmd == "restart":
+        # Build while the old service is still up, so the app is down only for the restart.
+        if not args.no_build and not ensure_ui():
+            return 1
         cmd_stop(argparse.Namespace(home=args.home, keep_model=True))
+        args.no_build = True              # already built (or deliberately skipped)
+        if not _ui_built():
+            print("no built UI yet — run without --no-build once", file=sys.stderr)
+            return 1
         return cmd_start(args)
     if args.cmd == "status":
         return cmd_status(args)

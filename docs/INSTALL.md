@@ -62,6 +62,10 @@ git pull
 ./vw restart      # or restart ./dev.sh
 ```
 
+`./vw restart` (and `./vw start`) rebuilds the web UI automatically when the frontend
+source changed since the last build, before stopping the old service. Pass `--no-build`
+to skip it.
+
 Data lives outside the repository (`~/.virtual-worker` for the service, `./data`
 for dev), so updates never touch your agents, chats or models.
 

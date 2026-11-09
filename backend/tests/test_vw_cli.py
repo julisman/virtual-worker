@@ -74,3 +74,57 @@ def test_vw_run_streams_text_and_sends_the_prompt(capsys):
 def test_vw_run_reports_unreachable_service(capsys):
     rc = vw_cli.main(["run", "helper", "x", "--port", "1"])
     assert rc == 2 and "cannot reach" in capsys.readouterr().err
+
+
+def _frontend(tmp_path, built_at: float, src_at: float) -> pathlib.Path:
+    import os
+    fe = tmp_path / "frontend"
+    (fe / "src" / "features").mkdir(parents=True)
+    (fe / "dist").mkdir()
+    src = fe / "src" / "features" / "page.tsx"
+    src.write_text("x")
+    idx = fe / "dist" / "index.html"
+    idx.write_text("<html>")
+    os.utime(src, (src_at, src_at))
+    os.utime(idx, (built_at, built_at))
+    return fe
+
+
+def test_ui_stale_detects_newer_source_and_missing_build(tmp_path):
+    assert not vw_cli.ui_stale(_frontend(tmp_path / "a", built_at=2000, src_at=1000))
+    assert vw_cli.ui_stale(_frontend(tmp_path / "b", built_at=1000, src_at=2000))
+    fe = _frontend(tmp_path / "c", built_at=2000, src_at=1000)
+    (fe / "dist" / "index.html").unlink()
+    assert vw_cli.ui_stale(fe)
+
+
+def test_ensure_ui_builds_only_when_stale_and_keeps_old_build_on_failure(tmp_path, monkeypatch):
+    calls = []
+
+    class R:
+        def __init__(self, rc):
+            self.returncode = rc
+
+    rc = {"v": 0}
+    monkeypatch.setattr(vw_cli.subprocess, "run", lambda cmd, cwd: calls.append((cmd, cwd)) or R(rc["v"]))
+    fresh = _frontend(tmp_path / "fresh", built_at=2000, src_at=1000)
+    assert vw_cli.ensure_ui(fresh) and calls == []                     # up to date → no build
+    stale = _frontend(tmp_path / "stale", built_at=1000, src_at=2000)
+    assert vw_cli.ensure_ui(stale) and calls[-1] == (["npm", "run", "build"], stale)
+    rc["v"] = 1                                                        # rebuild fails…
+    assert vw_cli.ensure_ui(stale)                                     # …old build still served
+    (stale / "dist" / "index.html").unlink()
+    assert not vw_cli.ensure_ui(stale)                                 # nothing to serve → fail
+
+
+def test_restart_builds_before_stopping(monkeypatch):
+    order = []
+    monkeypatch.setattr(vw_cli, "ensure_ui", lambda *a: order.append("build") or True)
+    monkeypatch.setattr(vw_cli, "cmd_stop", lambda a: order.append("stop") or 0)
+    monkeypatch.setattr(vw_cli, "_ui_built", lambda: True)
+    monkeypatch.setattr(vw_cli, "cmd_start", lambda a: order.append(("start", a.no_build)) or 0)
+    assert vw_cli.main(["restart"]) == 0
+    assert order == ["build", "stop", ("start", True)]
+    order.clear()
+    assert vw_cli.main(["restart", "--no-build"]) == 0
+    assert order == ["stop", ("start", True)]
