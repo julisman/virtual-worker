@@ -94,7 +94,7 @@ MCP server, a remote upstream, or a connected chat channel.
 
 ./vw start               # always-on service: built UI + API on one port, auto-restart
 #   app   → http://127.0.0.1:8888   (model server on :8080)
-./vw status | ./vw logs -f | ./vw restart | ./vw stop
+./vw status | ./vw logs -f | ./vw restart | ./vw stop   # restart rebuilds the UI if it changed
 ```
 
 Dev and service use different default ports and data directories (`./data` for dev,

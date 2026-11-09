@@ -20,6 +20,10 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Added
 
+- `./vw restart` and `./vw start` rebuild the web UI when the frontend source is newer
+  than the last build (e.g. after `git pull`), so the service never serves a stale UI.
+  `restart` builds before stopping the old service; a failed rebuild keeps the previous
+  build. `--no-build` skips it.
 - `browser_tab_close` browser tool: an agent can close its current tab, a tab by index,
   or all its other tabs, so tabs no longer pile up. In attach mode it only closes tabs the
   agent opened (or popups they spawned), never the user's; the last tab is blanked rather
