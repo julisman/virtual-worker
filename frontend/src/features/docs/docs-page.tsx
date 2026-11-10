@@ -93,6 +93,7 @@ const CATEGORIES: Category[] = [
       { id: "models", title: "Models (Hub)", icon: HubIcon, keywords: "huggingface unsloth discover download gguf mlx fits my device on device activate cache parallel chunked resume cancel hf_token gated" },
       { id: "engines", title: "Inference Engines", icon: WrenchIcon, keywords: "llama.cpp llama-server mlx mlx_lm mlx_vlm vision managed mode upstream apple silicon ngl ctx port" },
       { id: "evals", title: "Evaluate", icon: HubIcon, keywords: "evaluate evaluation suite benchmark leaderboard compare models quality tool calls judge rubric exact match tokens per second latency memory promote winner repetitions import export feedback" },
+      { id: "train", title: "Train", icon: HubIcon, keywords: "train fine-tune finetune lora qlora mlx apple silicon dataset jsonl feedback thumbs corrected loss fuse adapter on device" },
     ],
   },
   {
@@ -609,6 +610,19 @@ export VW_DEFAULT_MODEL="local-qwen"`}</Pre>
       <P>Starter cases of each type are one click away, suites import and export as JSON, and <Term>From feedback</Term> turns the replies you rated up or corrected in Chat into judged cases with the kept reply as the reference, so your own usage becomes the benchmark.</P>
       <P>The <Term>leaderboard</Term> ranks models by quality, then speed: average score, tool-call reliability, tokens per second, latency, the model server's peak resident memory, and errors. Repetitions average out sampling noise. Click a case in the per-case table to read every model's answer side by side with the judge's rationale. <Term>Promote</Term> makes a model the active one. Results export as CSV or JSON, and every run records the suite version it ran against.</P>
       <Tip>A run switches the active model and can take a while with several large models. Keep the machine awake (see <Code>docs/keep-awake.md</Code>) and expect the first case on each model to be slower while it loads.</Tip>
+    </>
+  ),
+  train: (
+    <>
+      <P><Term>Train</Term> (under <Term>Model</Term>) fine-tunes a local model on your own examples with LoRA, using MLX on Apple Silicon. Nothing leaves the machine, except downloading MLX and, if you type a Hugging Face id, the base model.</P>
+      <Steps items={[
+        <>If the page says MLX is not installed, click <Term>Install MLX</Term>. It installs mlx-lm into Virtual Worker's MLX engine.</>,
+        <>Get a dataset. <Term>From feedback</Term> turns the replies you rated up or corrected in Chat into examples (rated-down replies are left out), so the model learns from your own judgement. Or upload a JSONL file with one example per line, ideally chat format: <Code>{"{\"messages\": [{\"role\": \"user\", …}, {\"role\": \"assistant\", …}]}"}</Code>. <Code>prompt</Code>/<Code>completion</Code> and <Code>text</Code> rows work too, one format per file.</>,
+        <>Pick a <Term>base model</Term>: a downloaded MLX or safetensors model (GGUF-only models can't be trained) or a Hugging Face id. A small instruct model (1–4B, 4-bit) is a good first run.</>,
+        <>Optionally name the run, then <Term>Start training</Term>. <Term>Current run</Term> shows progress, the train and validation loss, and the trainer's log. Validation loss rising while training loss falls means the model is memorising: use fewer steps or more examples.</>,
+        <>When it finishes, the adapter is fused into a new model, listed on the Models page as <Code>local/&lt;name&gt;</Code>. <Term>Use on device</Term> makes it the active model for Chat, channels and the gateway.</>,
+      ]} />
+      <Tip>A handful of examples proves the loop works; a real change in behaviour needs hundreds. Before relying on a trained model, compare it with its base on <Term>Evaluate</Term> (a suite built from the same feedback is a good test). Only one job runs at a time, and training is capped at about 75% of memory (<Code>VW_FT_MEM_LIMIT_GB</Code>) so a run that asks for too much fails instead of freezing the Mac. In team mode only admins can train.</Tip>
     </>
   ),
   harness: (

@@ -297,6 +297,29 @@ Progress streams over SSE, interrupted runs are marked at startup, and
 `/api/eval` carries suites (with import, export and "from feedback"), runs,
 leaderboard, per-case matrix and CSV/JSON export. The page is `features/evals`.
 
+## 5c. Fine-tuning (`runtime/finetune_manager.py`, `routes/finetune.py`)
+
+Local LoRA training with MLX on Apple Silicon. A job validates its dataset (one
+JSONL schema per file: chat `messages`, `prompt`/`completion` or `text`), splits it
+into `train.jsonl` / `valid.jsonl`, writes an mlx-lm config and runs
+`mlx_lm.lora` through `runtime/mlx_shim.py`, which caps the MLX allocator
+(`VW_FT_MEM_LIMIT_GB`, `VW_FT_CACHE_LIMIT_GB`) so an over-committed run fails the
+job instead of the machine. Output lines are parsed into train and validation loss
+and streamed over SSE. The adapter is then fused (`mlx_lm.fuse`) into a standalone
+model under `<VW_HOME>/models/`, which the Models page lists as `local/<name>` and
+`llama_manager` serves with mlx-lm. Vision-language bases train their text side
+with `mlx_vlm.lora`; that adapter can't be fused, so it is served with its base.
+
+Training runs in the interpreter the MLX engine lives in (the managed
+`engines/mlx` venv, or the backend venv in dev); "Install MLX" goes through
+`runtime/engines.py`. One job at a time. State lives under `<VW_HOME>/finetune/`:
+`datasets/<id>.jsonl` with a `<id>.json` record, and `jobs/<id>/` holding
+`job.json`, the data split, adapters and `train.log`. A job that was running when
+the backend stopped is marked interrupted on load. Datasets can be built from
+chat feedback (`POST /api/finetune/datasets/feedback`, the same curation as the
+feedback export: rated-up and corrected turns, rated-down excluded). The API is
+admin-only in team mode. The page is `features/train`.
+
 ## 6. Trace capture
 
 `middleware/api_debug.py` is a pure-ASGI middleware that tees a bounded copy of
