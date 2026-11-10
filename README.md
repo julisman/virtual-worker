@@ -18,6 +18,16 @@ MCP server, a remote upstream, or a connected chat channel.
 > skills, knowledge, templates, gateway, traces) and the first chat channel (WhatsApp)
 > work today. See [`docs/PRD.md`](docs/PRD.md) for the full product plan.
 
+## Watch: Virtual Worker in 60 seconds
+
+<p align="center">
+  <a href="docs/media/explainer.mp4">
+    <img src="docs/media/explainer-poster.jpg" alt="Play the 60-second Virtual Worker explainer (with voice-over)" width="300" />
+  </a>
+  <br />
+  <sub>▶ <a href="docs/media/explainer.mp4">Play the explainer</a> (57 s, with voice-over)</sub>
+</p>
+
 ## What it does today
 
 - **Chat channels**: message an agent from **WhatsApp**, **Telegram**, **Discord** or
