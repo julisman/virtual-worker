@@ -29,6 +29,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -636,6 +637,32 @@ async def _pump(job: dict, proc, metrics: bool) -> None:
             parse_line(job, line) if metrics else _log(job, line)
 
 
+def _signal_group(proc, sig: int) -> None:
+    try:
+        os.killpg(proc.pid, sig)  # pgid == pid (start_new_session)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _terminate(proc, grace: float = 5.0) -> None:
+    """SIGTERM the trainer's whole process group (a helper process holding the
+    output pipe would otherwise keep the job in "cancelling"), then SIGKILL it
+    if it is still around after ``grace`` seconds."""
+    if proc.returncode is not None:
+        return
+    _signal_group(proc, signal.SIGTERM)
+
+    async def _escalate():
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=grace)
+        except asyncio.TimeoutError:
+            _signal_group(proc, signal.SIGKILL)
+    try:
+        asyncio.get_running_loop().create_task(_escalate())
+    except RuntimeError:
+        pass
+
+
 class _Cancelled(Exception):
     """The job was cancelled between steps (no process to signal)."""
 
@@ -646,10 +673,11 @@ async def _exec(job: dict, cmd: list[str], cwd: Path, metrics: bool = True):
     _log(job, "$ " + " ".join(cmd))
     proc = await asyncio.create_subprocess_exec(
         *cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"})
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        start_new_session=True)  # own process group, so a stop reaches its children too
     _PROCS[job["id"]] = proc
     if job.get("status") == "cancelling":  # cancelled while the process was spawning
-        proc.terminate()
+        _terminate(proc)
     try:
         await _pump(job, proc, metrics)
         return await proc.wait()
@@ -752,31 +780,22 @@ async def cancel(job_id: str) -> dict:
         return job
     # The run loop sees "cancelling" before its next step; a live process is signalled now.
     _set_status(job, "cancelling")
-    if proc and proc.returncode is None:
-        try:
-            proc.terminate()
-        except ProcessLookupError:
-            pass
+    if proc:
+        _terminate(proc)
     return job
 
 
 async def shutdown() -> None:
     """Stop any training process when the backend exits, so it doesn't keep
     holding unified memory as an orphan (the job reloads as interrupted)."""
-    for proc in list(_PROCS.values()):
-        if proc.returncode is None:
-            try:
-                proc.terminate()
-            except ProcessLookupError:
-                pass
-    for proc in list(_PROCS.values()):
+    procs = [p for p in _PROCS.values() if p.returncode is None]
+    for proc in procs:
+        _signal_group(proc, signal.SIGTERM)
+    for proc in procs:
         try:
             await asyncio.wait_for(proc.wait(), timeout=3)
-        except (asyncio.TimeoutError, ProcessLookupError):
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+        except asyncio.TimeoutError:
+            _signal_group(proc, signal.SIGKILL)
 
 
 async def activate(job_id: str) -> dict:
