@@ -17,6 +17,7 @@ exists for network channels (webhook today) whose URLs form an opt-in allow-list
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from storage import _sqlite
 import threading
@@ -251,10 +252,10 @@ def delivery_health(agent_id: str, channel: str, *, window: int = 50) -> dict:
     }
 
 
-def list_deliveries(*, agent_id: str | None = None, schedule_id: str | None = None,
+def _delivery_where(*, agent_id: str | None = None, schedule_id: str | None = None,
                     channel: str | None = None, status: str | None = None,
-                    source: str | None = None, limit: int = 200) -> list[dict]:
-    q = "SELECT * FROM deliveries WHERE 1=1"
+                    source: str | None = None, search: str | None = None) -> tuple[str, list]:
+    q = " WHERE 1=1"
     args: list = []
     if agent_id:
         q += " AND agent_id=?"; args.append(agent_id)
@@ -268,11 +269,42 @@ def list_deliveries(*, agent_id: str | None = None, schedule_id: str | None = No
         q += " AND status=?"; args.append(status)
     if source:
         q += " AND source=?"; args.append(source)
-    q += " ORDER BY ts DESC LIMIT ?"
-    args.append(max(1, int(limit)))
+    if search and search.strip():
+        # case-insensitive substring over target, text and error; LIKE wildcards in the term are literal
+        term = "%" + re.sub(r"([\\%_])", r"\\\1", search.strip().lower()) + "%"
+        q += (" AND (lower(coalesce(target,'')) LIKE ? ESCAPE '\\'"
+              " OR lower(coalesce(payload_text,'')) LIKE ? ESCAPE '\\'"
+              " OR lower(coalesce(error,'')) LIKE ? ESCAPE '\\')")
+        args += [term, term, term]
+    return q, args
+
+
+def list_deliveries(*, agent_id: str | None = None, schedule_id: str | None = None,
+                    channel: str | None = None, status: str | None = None,
+                    source: str | None = None, search: str | None = None,
+                    limit: int = 200, offset: int = 0) -> list[dict]:
+    where, args = _delivery_where(agent_id=agent_id, schedule_id=schedule_id, channel=channel,
+                                  status=status, source=source, search=search)
+    q = "SELECT * FROM deliveries" + where + " ORDER BY ts DESC, rowid DESC LIMIT ? OFFSET ?"
+    args += [max(1, int(limit)), max(0, int(offset))]
     with _conn() as conn:
         rows = conn.execute(q, args).fetchall()
     return [_del_row(r) for r in rows]
+
+
+def count_deliveries(*, agent_id: str | None = None, schedule_id: str | None = None,
+                     channel: str | None = None, status: str | None = None,
+                     source: str | None = None, search: str | None = None) -> dict:
+    """Rows matching the filters, plus a per-status tally over the same filters
+    minus ``status`` (so the summary chips stay meaningful while one is picked)."""
+    where, args = _delivery_where(agent_id=agent_id, schedule_id=schedule_id, channel=channel,
+                                  source=source, search=search)
+    with _conn() as conn:
+        rows = conn.execute("SELECT status, COUNT(*) AS n FROM deliveries" + where + " GROUP BY status",
+                            args).fetchall()
+    by_status = {r["status"]: r["n"] for r in rows}
+    total = by_status.get(status, 0) if status else sum(by_status.values())
+    return {"total": total, "byStatus": by_status}
 
 
 # --------------------------------------------------------------------------- #

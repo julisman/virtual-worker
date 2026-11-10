@@ -367,7 +367,7 @@ write-only secret (provider keys, channel credentials, delivery passwords).
 | `/api/chat`, `/api/sessions` | Agentic chat (SSE) and saved conversations. |
 | `/api/agents/*` | Agents plus their memory, files, tasks, activity, duty, schedules, inbox. |
 | `/api/channels/*` | Chat-channel accounts, pairing, bindings, pairing requests, Cloud API webhooks. |
-| `/api/delivery-targets`, `/api/deliver`, `/api/deliveries` | Delivery targets, a manual send, the audit log. |
+| `/api/delivery-targets`, `/api/deliver`, `/api/deliveries` | Delivery targets, a manual send, the audit log (paged: `limit`/`offset`, search `q`; returns `total` + `byStatus`). |
 | `/api/triggers/*` | Triggers, including the inbound webhook `hook/{token}`. |
 | `/api/providers`, `/api/tokens`, `/api/gateway` | Provider keys, gateway tokens, connect info. |
 | `/api/hub`, `/api/runtime`, `/api/engines`, `/api/monitor` | Models, the managed server, engines, live health. |

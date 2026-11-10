@@ -193,3 +193,51 @@ def test_scheduler_no_targets_is_activity_only(stores):
     mgr = SchedulerManager()
     asyncio.run(mgr._deliver_result(s, "result"))
     assert channel_store.list_deliveries(schedule_id=s["id"]) == []
+
+
+# ─── paging + search (Deliveries page) ───────────────────────────────────────
+
+def test_deliveries_page_offset_total_and_counts(stores):
+    _, channel_store, _, _ = stores
+    for i in range(7):
+        channel_store.log_delivery(channel="chat:telegram", target=f"t{i}", source="reply",
+                                   status="failed" if i == 3 else "sent", payload_text=f"msg {i}")
+    page1 = channel_store.list_deliveries(limit=3, offset=0)
+    page3 = channel_store.list_deliveries(limit=3, offset=6)
+    # newest first; same-second rows keep insertion order (rowid tiebreak) so pages never overlap
+    assert [r["target"] for r in page1] == ["t6", "t5", "t4"]
+    assert [r["target"] for r in page3] == ["t0"]
+    all_ids = [r["id"] for o in (0, 3, 6) for r in channel_store.list_deliveries(limit=3, offset=o)]
+    assert len(all_ids) == len(set(all_ids)) == 7
+    c = channel_store.count_deliveries()
+    assert c == {"total": 7, "byStatus": {"sent": 6, "failed": 1}}
+    # a status filter narrows total but the chips still tally every status
+    assert channel_store.count_deliveries(status="failed") == {"total": 1, "byStatus": {"sent": 6, "failed": 1}}
+
+
+def test_deliveries_search_is_server_side_and_literal(stores):
+    _, channel_store, _, _ = stores
+    channel_store.log_delivery(channel="email", target="Ops@Example.com", source="tool", status="sent",
+                               payload_text="weekly report")
+    channel_store.log_delivery(channel="webhook", target="https://h", source="tool", status="failed",
+                               error="HTTP 500 upstream", payload_text="50% done")
+    channel_store.log_delivery(channel="webhook", target="https://h", source="tool", status="sent",
+                               payload_text="500 rows")
+    assert [r["target"] for r in channel_store.list_deliveries(search="ops@example")] == ["Ops@Example.com"]
+    assert len(channel_store.list_deliveries(search="REPORT")) == 1
+    assert channel_store.count_deliveries(search="upstream")["total"] == 1      # matches the error text
+    assert [r["payloadText"] for r in channel_store.list_deliveries(search="50%")] == ["50% done"]  # % is literal
+    assert channel_store.list_deliveries(search="_") == []                       # _ is literal too
+
+
+def test_deliveries_route_returns_page_metadata(stores):
+    from fastapi.testclient import TestClient
+    from app import app
+    _, channel_store, _, _ = stores
+    for i in range(5):
+        channel_store.log_delivery(channel="desktop", target=None, source="tool", status="sent",
+                                   payload_text=f"n{i}")
+    body = TestClient(app).get("/api/deliveries", params={"limit": 2, "offset": 2}).json()
+    assert len(body["deliveries"]) == 2 and body["total"] == 5
+    assert body["limit"] == 2 and body["offset"] == 2 and body["byStatus"] == {"sent": 5}
+    assert TestClient(app).get("/api/deliveries", params={"q": "n4"}).json()["total"] == 1

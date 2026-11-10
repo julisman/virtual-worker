@@ -8,6 +8,10 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Added
 
+- Deliveries page: pagination (25 / 50 / 100 rows per page, page numbers) with the
+  search done on the server, so the whole log is reachable instead of the newest 500.
+  `GET /api/deliveries` takes `offset` and `q` and returns `total` and `byStatus`; the
+  sent / failed counts now cover every matching row.
 - README: a 60-second explainer video with voice-over (`docs/media/explainer.mp4`).
 
 ### Fixed
