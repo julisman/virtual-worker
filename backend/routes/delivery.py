@@ -6,7 +6,7 @@
   PATCH/DELETE      /api/channels/{id}
   POST              /api/channels/{id}/test     — send a test delivery
   POST              /api/deliver                — explicit-target send
-  GET               /api/deliveries             — audit log (filterable)
+  GET               /api/deliveries             — audit log (filterable, paged: limit/offset/q)
 
 Local-only and unauthenticated like the rest of /api/*. Network channels
 (webhook) are opt-in: a URL only becomes reachable once it's in an *enabled*
@@ -123,7 +123,12 @@ async def deliver_endpoint(body: DeliverIn):
 @router.get("/deliveries")
 async def list_deliveries(agentId: str | None = None, scheduleId: str | None = None,
                           channel: str | None = None, status: str | None = None,
-                          source: str | None = None, limit: int = 200):
-    return {"deliveries": channel_store.list_deliveries(
-        agent_id=agentId, schedule_id=scheduleId, channel=channel,
-        status=status, source=source, limit=limit)}
+                          source: str | None = None, q: str | None = None,
+                          limit: int = 200, offset: int = 0):
+    """Newest first. ``limit``/``offset`` page through the log; ``total`` is the
+    number of matching rows and ``byStatus`` tallies them ignoring ``status``."""
+    filters = dict(agent_id=agentId, schedule_id=scheduleId, channel=channel,
+                   status=status, source=source, search=q)
+    limit = min(max(1, limit), 1000)
+    return {"deliveries": channel_store.list_deliveries(**filters, limit=limit, offset=max(0, offset)),
+            **channel_store.count_deliveries(**filters), "limit": limit, "offset": max(0, offset)}

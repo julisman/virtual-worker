@@ -1,7 +1,8 @@
 // Deliveries — the audit log of everything Virtual Worker sent out (PRD §8.8,
 // §9). Every outbound send — schedule results, the deliver tool, chat-channel
 // replies, email, webhooks, test sends — writes one row to `deliveries`; this
-// page lists them newest-first with filters. Read-only: nothing here sends.
+// page lists them newest-first with filters, paged on the server (limit/offset,
+// search included). Read-only: nothing here sends.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiJson } from "@/lib/api";
@@ -25,6 +26,22 @@ interface Delivery {
 }
 
 interface AgentLite { id: string; name: string }
+
+interface DeliveryPage {
+  deliveries: Delivery[];
+  total: number;
+  byStatus: Record<string, number>;
+}
+
+const PAGE_SIZES = [25, 50, 100] as const;
+const PAGE_SIZE_KEY = "vw:deliveries-page-size";
+
+function loadPageSize(): number {
+  try {
+    const n = Number(localStorage.getItem(PAGE_SIZE_KEY));
+    return (PAGE_SIZES as readonly number[]).includes(n) ? n : 50;
+  } catch { return 50; }
+}
 
 const CHANNELS = ["in_app", "desktop", "webhook", "email", "chat", "obsidian"] as const;
 const STATUSES = ["sent", "failed", "dropped"] as const;
@@ -65,6 +82,10 @@ const selectCls = "rounded-xl border border-line bg-canvas px-3 py-1.5 text-sm t
 
 export function DeliveriesPage() {
   const [rows, setRows] = useState<Delivery[]>([]);
+  const [total, setTotal] = useState(0);
+  const [byStatus, setByStatus] = useState<Record<string, number>>({});
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(loadPageSize);
   const [agents, setAgents] = useState<AgentLite[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,22 +96,40 @@ export function DeliveriesPage() {
   const [source, setSource] = useState("");
   const [agentId, setAgentId] = useState("");
   const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");          // the debounced search sent to the server
+
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Any filter change starts over at the first page.
+  useEffect(() => { setPage(0); setOpen(null); }, [channel, status, source, agentId, query, pageSize]);
+  useEffect(() => { try { localStorage.setItem(PAGE_SIZE_KEY, String(pageSize)); } catch { /* private mode */ } }, [pageSize]);
 
   const load = useCallback(async () => {
-    const q = new URLSearchParams({ limit: "500" });
+    const q = new URLSearchParams({ limit: String(pageSize), offset: String(page * pageSize) });
     if (channel) q.set("channel", channel);
     if (status) q.set("status", status);
     if (source) q.set("source", source);
     if (agentId) q.set("agentId", agentId);
+    if (query) q.set("q", query);
     try {
-      setRows((await apiJson<{ deliveries: Delivery[] }>(`/api/deliveries?${q}`)).deliveries);
+      const r = await apiJson<DeliveryPage>(`/api/deliveries?${q}`);
+      setRows(r.deliveries);
+      setTotal(r.total ?? r.deliveries.length);
+      setByStatus(r.byStatus ?? {});
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to load");
     } finally {
       setLoading(false);
     }
-  }, [channel, status, source, agentId]);
+  }, [channel, status, source, agentId, query, page, pageSize]);
+
+  // Old rows get pruned: if the page we're on no longer exists, step back to the last one.
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  useEffect(() => { if (page > pageCount - 1) setPage(pageCount - 1); }, [page, pageCount]);
 
   useEffect(() => {
     load();
@@ -110,20 +149,8 @@ export function DeliveriesPage() {
     return m;
   }, [agents]);
 
-  const visible = useMemo(() => {
-    const s = search.trim().toLowerCase();
-    if (!s) return rows;
-    return rows.filter((d) =>
-      (d.target || "").toLowerCase().includes(s) ||
-      (d.payloadText || "").toLowerCase().includes(s) ||
-      (d.error || "").toLowerCase().includes(s));
-  }, [rows, search]);
-
-  const counts = useMemo(() => {
-    const c = { sent: 0, failed: 0, dropped: 0 };
-    for (const d of rows) if (d.status in c) c[d.status as keyof typeof c] += 1;
-    return c;
-  }, [rows]);
+  const counts = { sent: byStatus.sent ?? 0, failed: byStatus.failed ?? 0, dropped: byStatus.dropped ?? 0 };
+  const filtered = !!(channel || status || source || agentId || query);
 
   return (
     <div className="mx-auto h-full max-w-6xl overflow-y-auto px-8 py-8">
@@ -171,9 +198,9 @@ export function DeliveriesPage() {
       {/* Table */}
       {loading ? (
         <p className="text-sm text-mute">Loading…</p>
-      ) : visible.length === 0 ? (
+      ) : rows.length === 0 ? (
         <p className="rounded-2xl border border-line bg-canvas px-4 py-10 text-center text-sm text-mute">
-          {rows.length === 0
+          {!filtered
             ? "Nothing sent yet. Add a delivery target to a schedule, connect a chat channel, or let a worker use the deliver tool."
             : "No deliveries match these filters."}
         </p>
@@ -192,7 +219,7 @@ export function DeliveriesPage() {
               </tr>
             </thead>
             <tbody>
-              {visible.map((d) => {
+              {rows.map((d) => {
                 const isOpen = open === d.id;
                 return (
                   <DeliveryRow key={d.id} d={d} isOpen={isOpen} agentName={agentName[d.agentId || ""]}
@@ -204,11 +231,67 @@ export function DeliveriesPage() {
         </div>
       )}
 
+      {!loading && total > 0 && (
+        <Pager page={page} pageCount={pageCount} pageSize={pageSize} total={total} shown={rows.length}
+          onPage={(p) => { setPage(p); setOpen(null); }} onPageSize={setPageSize} />
+      )}
+
       <p className="mt-4 text-xs text-mute">
         Rows older than the delivery retention window are pruned by the maintenance loop
         (<span className="font-mono">VW_DELIVERY_RETENTION_DAYS</span>, 90 days by default).
       </p>
     </div>
+  );
+}
+
+// Page numbers to show: first, last, and a window around the current page, with gaps.
+function pageWindow(page: number, count: number): (number | "gap")[] {
+  const keep = new Set([0, count - 1, page - 1, page, page + 1].filter((p) => p >= 0 && p < count));
+  const out: (number | "gap")[] = [];
+  let prev = -1;
+  for (const p of [...keep].sort((a, b) => a - b)) {
+    if (prev >= 0 && p - prev > 1) out.push("gap");
+    out.push(p);
+    prev = p;
+  }
+  return out;
+}
+
+function Pager({ page, pageCount, pageSize, total, shown, onPage, onPageSize }: {
+  page: number; pageCount: number; pageSize: number; total: number; shown: number;
+  onPage: (p: number) => void; onPageSize: (n: number) => void;
+}) {
+  const from = total === 0 ? 0 : page * pageSize + 1;
+  const to = page * pageSize + shown;
+  const btn = "min-w-8 rounded-lg px-2.5 py-1 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40";
+  return (
+    <nav aria-label="Deliveries pages" className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+      <span className="text-xs text-mute">
+        Showing <span className="font-medium text-body">{from}–{to}</span> of <span className="font-medium text-body">{total}</span>
+      </span>
+      <label className="flex items-center gap-2 text-xs text-mute">
+        Rows per page
+        <select value={pageSize} onChange={(e) => onPageSize(Number(e.target.value))} className={selectCls}>
+          {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </label>
+      {pageCount > 1 && (
+        <div className="ml-auto flex items-center gap-1">
+          <button type="button" onClick={() => onPage(page - 1)} disabled={page === 0}
+            className={`${btn} text-body hover:bg-soft hover:text-ink`} aria-label="Previous page">‹ Prev</button>
+          {pageWindow(page, pageCount).map((p, i) => p === "gap"
+            ? <span key={`gap${i}`} className="px-1 text-mute">…</span>
+            : (
+              <button key={p} type="button" onClick={() => onPage(p)} aria-current={p === page ? "page" : undefined}
+                className={`${btn} ${p === page ? "bg-primary font-semibold text-white" : "text-body hover:bg-soft hover:text-ink"}`}>
+                {p + 1}
+              </button>
+            ))}
+          <button type="button" onClick={() => onPage(page + 1)} disabled={page >= pageCount - 1}
+            className={`${btn} text-body hover:bg-soft hover:text-ink`} aria-label="Next page">Next ›</button>
+        </div>
+      )}
+    </nav>
   );
 }
 

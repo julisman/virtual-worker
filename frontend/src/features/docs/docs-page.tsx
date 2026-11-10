@@ -83,7 +83,7 @@ const CATEGORIES: Category[] = [
   {
     title: "Channels",
     sections: [
-      { id: "deliveries", title: "Deliveries", icon: ChannelsIcon, keywords: "deliveries audit log sent failed dropped outbound email webhook desktop notification obsidian schedule result deliver tool retention" },
+      { id: "deliveries", title: "Deliveries", icon: ChannelsIcon, keywords: "deliveries audit log sent failed dropped outbound email webhook desktop notification obsidian schedule result deliver tool retention pagination page" },
       { id: "channels", title: "Chat Channels", icon: ChannelsIcon, keywords: "whatsapp telegram botfather bot token discord gateway slack socket mode channel pair qr code linked device cloud api webhook dm policy pairing allowlist group mention binding route conversation channel_send" },
     ],
   },
@@ -591,7 +591,8 @@ export VW_DEFAULT_MODEL="local-qwen"`}</Pre>
       <P><Term>Deliveries</Term> is the audit log of everything Virtual Worker sent out of the app: schedule results, replies on chat channels, emails, webhooks, desktop notifications and Obsidian notes. Every attempt is one row with its outcome, so you can always answer "did that go out, and where?".</P>
       <Bullets items={[
         <><Term>sent</Term> — the target accepted it. <Term>failed</Term> — the send errored (open the row for the error). <Term>dropped</Term> — refused before sending, for example a webhook URL or email address that is not on the allow-list.</>,
-        <>Filter by agent, kind, source (<Code>schedule</Code>, the <Code>deliver</Code> tool, a channel <Code>reply</Code>, a <Code>test</Code> send) or status, and search the target or text. Click a row to read exactly what was sent.</>,
+        <>Filter by agent, kind, source (<Code>schedule</Code>, the <Code>deliver</Code> tool, a channel <Code>reply</Code>, a <Code>test</Code> send) or status, and search the target, text or error. Click a row to read exactly what was sent.</>,
+        <>The log is paged: pick 25, 50 or 100 rows per page and move with the page numbers under the table. The sent / failed counts and "Showing … of …" cover every matching row, not just the page you are on. Changing a filter or the search goes back to page 1.</>,
         <>Chat-channel replies also appear under the agent's Activity; schedule results show their latest delivery status next to the schedule.</>,
       ]} />
       <P>Rows are kept for <Code>VW_DELIVERY_RETENTION_DAYS</Code> (90 by default) and pruned by the hourly maintenance loop. Nothing on this page sends anything; it only reads the log.</P>
