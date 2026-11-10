@@ -384,6 +384,18 @@ The product is built around five ideas:
 - FR-E4. A suite can be built from captured chat feedback, so real usage becomes the
   benchmark. _Implemented 2026-11-07._
 
+### 8.15 Fine-tuning from feedback (added 2026-11-10)
+
+- FR-F1. Local LoRA fine-tuning on Apple Silicon (MLX) of a downloaded or Hugging Face
+  base model; text causal-LMs fused into a standalone model, vision-language models
+  trained on their text side and served as base + adapter.
+- FR-F2. Datasets uploaded as JSONL (validated, one schema per file) or built from chat
+  feedback: rated-up and corrected replies become examples, rated-down are excluded.
+- FR-F3. Live progress (train and validation loss, log), cancel, history, delete with
+  disk reclaimed; one job at a time; memory caps so a run fails the job, not the machine.
+- FR-F4. A finished model is listed on the Models page and can be served in one click;
+  compare it with the base on Evaluate before relying on it. _Implemented 2026-11-10._
+
 ## 9. UX and surfaces
 
 **Web UI** (sidebar app, light and dark):
@@ -504,7 +516,7 @@ external channel; capture and background loops are best-effort and never crash t
 | **M4 Templates and knowledge** | Template format, gallery, deploy, export/import, knowledge bases, wikis, backup/restore | Deploy a Customer Support Rep that answers from uploaded docs in one sitting |
 | **M5 More channels and teams** — Telegram 2026-11-04; providers, gateway, flow-back, custom tools, Discord and Slack 2026-11-07 | Telegram, Discord, Slack adapters; delegation and inbox flow-back; custom tool builder; analytics; BYOK providers and gateway | Two workers collaborate on a delegated task from a group chat |
 | **M6 Packaging and trust** — service mode 2026-11-04, login service + `vw run` + team-mode hardening 2026-11-07; desktop build scaffold present | Service mode, desktop build, team mode with accounts and audit, security hardening pass | Runs unattended for a week; passes the security checklist |
-| **Later** | Fine-tuning from feedback, evaluation suites, voice, browser control and flow recorder, case management for support teams, hosted template index | |
+| **Later** | Voice, browser control and flow recorder, case management for support teams, hosted template index | |
 
 ## 14. Risks and mitigations
 
@@ -570,8 +582,9 @@ Checked requirement by requirement against the code on `main`.
 | 9 UX | Mostly done | Every listed surface exists except a Home screen (Chat is the landing tab) |
 | First-run experience | Done | Wizard: model, worker from a template, optional chat app |
 | 8.14 Evaluation suites | Done | Suites, multi-model runs, four scorers, leaderboard, drill-down, promote, from-feedback |
+| 8.15 Fine-tuning from feedback | Done | MLX LoRA training, upload or feedback-built datasets, live loss, fuse, serve on device |
 | 8.13 Coding harness | Done | Claude Code and Codex sessions listed and driven from chat channels, worker tools and the API |
-| Later (deferred) | Not started | Fine-tuning from feedback, evaluation suites, voice, case management, hosted template index. Browser control, listed as later, is present |
+| Later (deferred) | Not started | Voice, case management, hosted template index. Browser control, listed as later, is present |
 
 Open items that need a person rather than code: the copyright holder line in
 `LICENSE`, the first push and CI run, real-account tests of each chat channel, and

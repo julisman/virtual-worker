@@ -20,6 +20,12 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Added
 
+- **Train** page (Model → Train): local LoRA fine-tuning with MLX on Apple Silicon.
+  Build a dataset from the replies rated up or corrected in Chat, or upload JSONL; pick a
+  downloaded or Hugging Face base model; watch train and validation loss live; the adapter
+  is fused into `local/<name>` on the Models page and served in one click. Vision-language
+  bases train their text side. One job at a time, memory-capped, admin-only in team mode.
+  API under `/api/finetune`.
 - `./vw restart` and `./vw start` rebuild the web UI when the frontend source is newer
   than the last build (e.g. after `git pull`), so the service never serves a stale UI.
   `restart` builds before stopping the old service; a failed rebuild keeps the previous

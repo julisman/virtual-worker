@@ -108,6 +108,12 @@ inbound (browser / coding agents / later: chat channels)
   judge); runs activate each model via `llama_manager` and restore the previous one;
   the runner's `_activate/_wait_healthy/_chat_completion/_judge_completion/_rss_bytes/
   _restore` are monkeypatch seams, so tests never load a model. Only one run at a time.
+- **Fine-tuning** (`runtime/finetune_manager.py` + `runtime/mlx_shim.py` + `routes/finetune.py`,
+  PRD §8.15): MLX LoRA jobs (one at a time) run in the MLX engine's interpreter through the
+  memory-capping shim, stream loss over SSE, and fuse into `<VW_HOME>/models/<name>` (served
+  via `llama_manager`). Datasets are uploaded JSONL or built from chat feedback. State is
+  `<VW_HOME>/finetune/{datasets,jobs}` resolved at call time; tests swap the trainer
+  interpreter (`_mlx_python`) for a fake script, so no MLX is needed.
 - **Coding harnesses** (`harness/`, PRD §8.13): `base.py` holds the adapter contract,
   settings, the `Job` record and subprocess supervision; `claude_code.py` reads
   `~/.claude/sessions` (live registry) + `~/.claude/projects/*/*.jsonl` (transcripts) and

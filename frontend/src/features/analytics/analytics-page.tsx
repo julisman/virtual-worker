@@ -432,7 +432,7 @@ function FeedbackCard() {
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-sm text-body">
           Ratings and corrections you give replies in Chat. Up and edited turns become training
-          examples; down turns are kept out of the export.
+          examples (build a dataset from them on Model → Train); down turns are kept out.
         </p>
         <span className="ml-auto" />
         {counts && (

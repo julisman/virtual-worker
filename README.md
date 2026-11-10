@@ -62,6 +62,9 @@ MCP server, a remote upstream, or a connected chat channel.
 - **Evaluate**: benchmark on-device models on a suite of cases (exact, keywords, tool
   calls, LLM judge), with a leaderboard of quality, speed and memory, per-case
   drill-down, suites built from your own chat feedback, and one-click promote.
+- **Train**: fine-tune a local model with LoRA on Apple Silicon (MLX). Build the dataset
+  from the replies you rated up or corrected in Chat, or upload JSONL; watch the loss
+  live; the result appears on the Models page and is one click from serving.
 - **Coding harness**: see your Claude Code and Codex sessions and send them prompts from
   any chat channel (`/code …`, `/codex …`) or in plain language through a worker; results
   flow back into the same chat.
@@ -273,8 +276,7 @@ The product plan lives in [`docs/PRD.md`](docs/PRD.md). Next milestones:
 1. Real-device validation of each channel and the first public release.
 2. Desktop packaging and signed builds; Windows without WSL.
 3. Local voice (speech to text and text to speech) in Chat.
-4. Evaluation suites and fine-tuning from the feedback export.
-5. A browser recorder that turns a recorded flow into a skill.
+4. A browser recorder that turns a recorded flow into a skill.
 
 ## Contributing
 
