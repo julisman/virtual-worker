@@ -6,6 +6,10 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- README: a 60-second explainer video with voice-over (`docs/media/explainer.mp4`).
+
 ### Fixed
 
 - Telegram: replies render Markdown (bold, italic, headings, bullets, links, code)
