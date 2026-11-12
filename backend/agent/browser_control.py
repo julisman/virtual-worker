@@ -76,6 +76,7 @@ _ACT_MS = 10_000            # click/type action timeout
 # and the whole agent run — hostage for 3 minutes per call. Fail fast to the
 # launched-browser fallback instead.
 _ATTACH_MS = 10_000
+_BG_TAB_MS = 5000                  # wait for a background tab to appear
 _MAX_REFS = 200             # cap snapshot size
 _MAX_READ = 6000            # default browser_read char cap
 
@@ -359,9 +360,39 @@ async def _is_agent_tab(page) -> bool:
     return False
 
 
+async def _new_background_tab(ctx):
+    """Open a tab in the attached Chrome WITHOUT activating it (like a Cmd-click):
+    CDP ``Target.createTarget`` with ``background: true``. ``ctx.new_page()`` always
+    makes the new tab the active one, which pulls the user off whatever they were
+    reading. Returns None on any failure so the caller falls back to new_page()."""
+    if _cdp is None:
+        return None
+    session = None
+    try:
+        session = await _cdp.new_browser_cdp_session()
+        async with ctx.expect_page(timeout=_BG_TAB_MS) as info:
+            await session.send("Target.createTarget", {"url": "about:blank", "background": True})
+        return await info.value
+    except Exception as exc:             # noqa: BLE001 — fall back to a normal tab
+        logger.debug("background tab failed (%s); opening a normal one", exc)
+        return None
+    finally:
+        if session is not None:
+            try:
+                await session.detach()
+            except Exception:            # noqa: BLE001
+                pass
+
+
 async def _new_agent_tab(ctx):
-    """Open a new tab and mark it as Virtual Worker's (for extension tab-grouping)."""
-    page = await ctx.new_page()
+    """Open a new tab and mark it as Virtual Worker's (for extension tab-grouping).
+    Attached to the user's Chrome with "Never steal focus", the tab opens in the
+    background so the user's current tab stays in front."""
+    page = None
+    if _attached() and config.browser_focus_policy() == "never":
+        page = await _new_background_tab(ctx)
+    if page is None:
+        page = await ctx.new_page()
     await _mark_agent_tab(page)
     _remember_agent_tab(page)
     return page

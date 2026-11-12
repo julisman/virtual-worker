@@ -73,6 +73,8 @@ def _isolate(monkeypatch):
     monkeypatch.setattr(bc, "_attach_note", "")
     monkeypatch.setattr(bc, "_available", lambda: True)
     monkeypatch.setattr(config, "BROWSER_CDP_URL", "", raising=False)
+    # don't inherit the developer's real Settings → Browser focus choice
+    monkeypatch.setattr(config, "browser_focus_policy", lambda: "allow")
     yield
 
 
@@ -340,3 +342,96 @@ def test_tab_close_registered():
     from agent import tools
     assert "browser_tab_close" in tools.TOOLS
     assert "browser_tab_close" in bc.CONTROL_TOOL_NAMES
+
+
+# ─── "Never steal focus": new agent tabs open in the background ──────────────
+
+class _FakeCdpSession:
+    def __init__(self, ctx, fail=False):
+        self.ctx, self.fail, self.sent, self.detached = ctx, fail, [], False
+
+    async def send(self, method, params):
+        self.sent.append((method, params))
+        if self.fail:
+            raise RuntimeError("Target.createTarget not allowed")
+        self.ctx._pending = FakePage(url="about:blank", title="")
+        self.ctx.pages.append(self.ctx._pending)
+
+    async def detach(self):
+        self.detached = True
+
+
+class _FakeExpect:
+    def __init__(self, ctx):
+        self.ctx = ctx
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    @property
+    def value(self):
+        async def _v():
+            return self.ctx._pending
+        return _v()
+
+
+class _BgCtx(FakeCtx):
+    _pending = None
+
+    def expect_page(self, timeout=None):
+        return _FakeExpect(self)
+
+
+class _FakeCdpBrowser:
+    def __init__(self, ctx, fail=False):
+        self.session = _FakeCdpSession(ctx, fail)
+
+    async def new_browser_cdp_session(self):
+        return self.session
+
+
+def _bg_setup(monkeypatch, policy, attached=True, fail=False):
+    ctx = _BgCtx([FakePage(title="user tab")])
+    browser = _FakeCdpBrowser(ctx, fail) if attached else None
+    monkeypatch.setattr(bc, "_cdp", browser)
+    monkeypatch.setattr(config, "browser_focus_policy", lambda: policy)
+    calls = []
+    real_new = ctx.new_page
+
+    async def new_page():
+        calls.append("new_page")
+        return await real_new()
+    ctx.new_page = new_page
+
+    async def _noop(*_a, **_k):
+        return None
+    monkeypatch.setattr(bc, "_mark_agent_tab", _noop)
+    return ctx, browser, calls
+
+
+def test_never_steal_focus_opens_agent_tab_in_background(monkeypatch):
+    ctx, browser, calls = _bg_setup(monkeypatch, "never")
+    page = run(bc._new_agent_tab(ctx))
+    assert browser.session.sent == [("Target.createTarget", {"url": "about:blank", "background": True})]
+    assert calls == [] and page is ctx.pages[-1] and browser.session.detached
+
+
+def test_allow_focus_opens_a_normal_tab(monkeypatch):
+    ctx, browser, calls = _bg_setup(monkeypatch, "allow")
+    run(bc._new_agent_tab(ctx))
+    assert calls == ["new_page"] and browser.session.sent == []
+
+
+def test_background_tab_needs_attach_mode(monkeypatch):
+    ctx, _, calls = _bg_setup(monkeypatch, "never", attached=False)
+    run(bc._new_agent_tab(ctx))
+    assert calls == ["new_page"]                 # Virtual Worker's own window: nothing to protect
+
+
+def test_background_tab_failure_falls_back_to_a_normal_tab(monkeypatch):
+    ctx, browser, calls = _bg_setup(monkeypatch, "never", fail=True)
+    page = run(bc._new_agent_tab(ctx))
+    assert calls == ["new_page"] and page is ctx.pages[-1] and browser.session.detached

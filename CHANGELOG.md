@@ -16,6 +16,10 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Fixed
 
+- Browser control: with Settings → Browser → "Never steal focus" and Virtual Worker
+  attached to your own Chrome, a new agent tab opens in the background instead of
+  becoming the active tab (Chrome's `Target.createTarget` with `background: true`;
+  falls back to a normal tab if Chrome refuses).
 - Telegram: replies render Markdown (bold, italic, headings, bullets, links, code)
   instead of showing raw `**` markers. Converted to Telegram HTML; if Telegram rejects
   the markup the reply is resent as plain text.

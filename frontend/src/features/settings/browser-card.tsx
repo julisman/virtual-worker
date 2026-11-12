@@ -136,7 +136,8 @@ export function BrowserCard() {
           </div>
           <p className="mt-1.5 text-[11px] leading-snug text-mute">
             Applies when the browser is visible or CDP-attached: "Never steal focus" stops an agent from
-            pulling the window in front of what you're doing on each action.
+            pulling the window in front of what you're doing on each action. Attached to your Chrome, the
+            agent's new tabs also open in the background, like a Cmd-click.
           </p>
         </div>
 
