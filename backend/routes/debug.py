@@ -22,13 +22,33 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _backfill_window(rows: list[dict]) -> None:
+    """Fill ``contextWindow`` for rows recorded before the window was stored
+    (or by the gateway middleware) from the cached window ladder — no network.
+    Best-effort: an unknown model just leaves the meter without a percentage."""
+    from agent import context_window as cw
+    cache: dict[tuple, int | None] = {}
+    for row in rows:
+        if row.get("contextWindow") or not row.get("model"):
+            continue
+        prov = row.get("provider")
+        key = (row["model"], prov)
+        if key not in cache:
+            try:
+                cache[key] = cw.resolve_window_sync(
+                    model=row["model"],
+                    provider_id=prov if prov and prov not in ("local", "unknown") else None)[0]
+            except Exception:  # noqa: BLE001
+                cache[key] = None
+        row["contextWindow"] = cache[key]
+
+
 @router.get("/sessions")
 async def list_debug_sessions():
     try:
-        return {
-            "summary": debug_db.summary(),
-            "sessions": debug_db.list_sessions(),
-        }
+        sessions = debug_db.list_sessions()
+        _backfill_window(sessions)
+        return {"summary": debug_db.summary(), "sessions": sessions}
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("debug: list sessions failed")
         raise HTTPException(status_code=500, detail="Failed to list debug sessions") from exc
@@ -40,6 +60,7 @@ async def get_debug_session(session_id: str):
         data = debug_db.get_session(session_id)
         if not data["runs"]:
             raise HTTPException(status_code=404, detail="No runs for this session")
+        _backfill_window(data["runs"])
         return data
     except HTTPException:
         raise

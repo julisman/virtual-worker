@@ -2,7 +2,8 @@
 
 """GET/POST /api/agents/{id}/schedules,
 PUT/DELETE /api/agents/{id}/schedules/{scheduleId},
-POST /api/agents/{id}/schedules/{scheduleId}/run  (run now).
+POST /api/agents/{id}/schedules/{scheduleId}/run  (run now),
+POST /api/agents/{id}/schedules/{scheduleId}/reset-context  (next run starts a clean session).
 
 The agent can also create/list/delete its own schedules from inside the loop via
 its schedule_* tools; this route is the human side. Times are the machine's
@@ -15,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from agent.cron import describe, validate
-from agent.scheduler import scheduler
+from agent.scheduler import reset_context, scheduler
 from storage import agent_store, schedule_store
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,8 @@ class ScheduleIn(BaseModel):
     enabled: bool | None = None
     # Explicit per-schedule delivery targets (PRD-01): [{channel, target}].
     deliverTo: list[dict] | None = None
+    # 'shared' (one session across runs, default) | 'fresh' (new session every run).
+    sessionMode: str | None = None
 
 
 def _require_agent(agent_id: str) -> None:
@@ -55,7 +58,7 @@ async def create_schedule(agent_id: str, body: ScheduleIn):
         s = schedule_store.create(
             agent_id, (body.title or "").strip(), body.prompt,
             kind=kind, cron_expr=body.cron, run_at=body.runAt,
-            deliver_to=body.deliverTo,
+            deliver_to=body.deliverTo, session_mode=body.sessionMode or "shared",
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
@@ -90,6 +93,17 @@ async def run_schedule(agent_id: str, schedule_id: str):
     if not s:
         raise HTTPException(404, "no such schedule")
     return await scheduler.run_now(s)
+
+
+@router.post("/{agent_id}/schedules/{schedule_id}/reset-context")
+async def reset_schedule_context(agent_id: str, schedule_id: str):
+    """Clear the schedule's carried context: the next run starts in a brand-new
+    session. Past runs stay in Debug under their old session id."""
+    _require_agent(agent_id)
+    s = schedule_store.get(schedule_id)
+    if not s or s["agentId"] != agent_id:
+        raise HTTPException(404, "no such schedule")
+    return reset_context(schedule_id)
 
 
 @router.get("/cron/preview")

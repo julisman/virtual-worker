@@ -461,3 +461,24 @@ def test_prompt_tokens_sum_accumulates_across_turns(home, monkeypatch):
     # input_tokens keeps last-turn semantics; the sum spans both turns.
     assert captured["run"]["input_tokens"] == 150
     assert captured["run"]["prompt_tokens_sum"] == 250
+
+
+def test_context_window_peak_and_series_recorded(home, monkeypatch):
+    """The Debug context meter: peak = the biggest single call's prompt (not the
+    sum), the per-call series in order, and the reported window."""
+    stream = _tool_then_answer_stream(
+        turn0_delta={"reasoning": "r"},
+        turn0_usage={"prompt_tokens": 900, "completion_tokens": 5},
+        turn1_usage={"prompt_tokens": 400, "completion_tokens": 2})
+    captured = _capture_run(monkeypatch)
+    monkeypatch.setattr(loop.egress, "stream", stream)
+
+    async def go():
+        async for _ in loop.run([{"role": "user", "content": "go"}], model="m",
+                                tools=_echo_registry(), report_window=2000):
+            pass
+    asyncio.run(go())
+    run = captured["run"]
+    assert run["context_series"] == [900, 400]
+    assert run["peak_context_tokens"] == 900
+    assert run["context_window"] == 2000

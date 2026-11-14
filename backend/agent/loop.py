@@ -775,6 +775,7 @@ async def run(
     context_mode: str = "chars",
     context_window: int | None = None,
     context_window_source: str | None = None,
+    report_window: int | None = None,
     effective_reserve: int = 0,
     compact_keep: str = "messages",
     compact_keep_amount: int = 0,
@@ -1008,6 +1009,9 @@ async def run(
     # summed cache reads by summed prompts (input_tokens keeps its last-turn
     # meaning, which other features read).
     prompt_tokens_sum = 0
+    # Every model call's prompt size, in order — how full the context window got
+    # call by call (the Debug context meter). Its max is the run's peak usage.
+    context_series: list[int] = []
     cache_read_sum = 0
     cache_write_sum = 0
     out_tokens = 0
@@ -1194,6 +1198,7 @@ async def run(
             if usage.get("prompt_tokens"):
                 in_tokens = usage["prompt_tokens"]  # last turn's prompt size
                 prompt_tokens_sum += usage["prompt_tokens"]
+                context_series.append(int(usage["prompt_tokens"]))
 
             if not turn["tool_calls"]:
                 if turn.get("finish") == "length" and (
@@ -1249,12 +1254,12 @@ async def run(
                               else "turn generated tokens but no visible text"
                               if turn.get("usage")
                               else "stream carried no output at all")
-                    _mode = ("at low reasoning effort" if _nudge_low_effort
+                    _nudge_mode = ("at low reasoning effort" if _nudge_low_effort
                              else "with doubled output budget" if _nudge_budget_boost
                              else "at configured effort")
                     entries.append({"type": "system",
                                     "text": f"[empty-reply nudge {_final_nudges}/"
-                                            f"{_FINAL_NUDGE_MAX}] {_shape}; retrying {_mode}",
+                                            f"{_FINAL_NUDGE_MAX}] {_shape}; retrying {_nudge_mode}",
                                     "timestamp": _now_iso()})
                     convo.append({"role": "user", "content": (
                         "[runtime notice — not the user] You returned an empty "
@@ -1566,6 +1571,7 @@ async def run(
             if usage.get("prompt_tokens"):
                 in_tokens = usage["prompt_tokens"]
                 prompt_tokens_sum += usage["prompt_tokens"]
+                context_series.append(int(usage["prompt_tokens"]))
             _persist_sidecar(
                 {"role": "assistant", "content": turn["text"] or None,
                  "tool_calls": []},
@@ -1614,7 +1620,9 @@ async def run(
             cache_target=provider, prompt_tokens_sum=prompt_tokens_sum,
             cache_read_sum=cache_read_sum, cache_write_sum=cache_write_sum,
             reasoning_effort=(reasoning_effort if (reasoning_effort and provider is not None)
-                              else None))
+                              else None),
+            context_series=context_series,
+            context_window=context_window or report_window)
 
 
 def _wire_diagnostics(cache_target: dict | None, reasoning_effort: str | None) -> dict:
@@ -1664,7 +1672,8 @@ def _wire_diagnostics(cache_target: dict | None, reasoning_effort: str | None) -
 def _record(run_id, session_id, model, start, entries, final_text, tool_count,
             in_tokens, out_tokens, is_error, err_text, provider="local", agent_id=None,
             reasoning_effort=None, cache_target=None, prompt_tokens_sum=0,
-            cache_read_sum=None, cache_write_sum=None):
+            cache_read_sum=None, cache_write_sum=None, context_series=None,
+            context_window=None):
     """Persist the loop's trail as one Debug run (best-effort)."""
     # Sum each assistant turn's cache reads/writes so the run header can show a
     # cache hit-rate — the middleware path fills these for API-captured calls, so
@@ -1695,6 +1704,11 @@ def _record(run_id, session_id, model, start, entries, final_text, tool_count,
             # Summed per-turn prompt sizes (input_tokens stays last-turn); lets the
             # run-level cache hit-rate divide summed reads by summed prompts.
             "prompt_tokens_sum": prompt_tokens_sum,
+            # Context-window usage: the biggest single call's prompt (how full
+            # the window got), the window it's measured against, every call's size.
+            "peak_context_tokens": max(context_series) if context_series else (in_tokens or 0),
+            "context_window": context_window,
+            "context_series": context_series or None,
             "cache_read": cache_read, "cache_write": cache_write,
             "total_tokens": (prompt_tokens_sum or in_tokens or 0) + (out_tokens or 0),
             # The run preview should show the CURRENT question, not the oldest

@@ -31,12 +31,52 @@ _SCHEDULE_DIRECTIVE = (
 )
 
 
+def release_session(session_id: str | None) -> None:
+    """Drop the per-session state a run leaves behind so nothing from that
+    session can leak into a later one: tools unlocked via search_tools, the
+    pinned clock line, and stored reasoning sidecars. Debug traces are kept.
+    Best-effort — called after a context reset and after every fresh-mode run."""
+    if not session_id:
+        return
+    try:
+        from agent import compose, loop
+        loop._SESSION_UNLOCKS.pop(session_id, None)
+        compose._clock_cache.pop(session_id, None)
+    except Exception:  # noqa: BLE001
+        logger.debug("release_session: in-memory cleanup failed", exc_info=True)
+    try:
+        from storage import reasoning_store
+        reasoning_store.delete_session(session_id)
+    except Exception:  # noqa: BLE001
+        logger.debug("release_session: reasoning cleanup failed", exc_info=True)
+
+
+def reset_context(schedule_id: str) -> dict | None:
+    """Reset a schedule's context: its next run starts in a clean session, and
+    the state the old session carried is released. Returns the schedule."""
+    cur = schedule_store.get(schedule_id)
+    if not cur:
+        return None
+    old = cur["sessionId"]
+    updated = schedule_store.reset_context(schedule_id)
+    release_session(old)
+    return updated
+
+
 # --------------------------------------------------------------------------- #
 # Agent-facing tools (no heavy imports — safe for compose.py to import)
 # --------------------------------------------------------------------------- #
 
+def _truthy(v) -> bool:
+    """Small models send booleans as strings ("true", "yes")."""
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on", "fresh")
+    return bool(v)
+
+
 def make_schedule_tools(agent_id: str) -> dict[str, dict]:
-    """``{name: {schema, fn}}`` for schedule_create / schedule_list / schedule_delete.
+    """``{name: {schema, fn}}`` for schedule_create / schedule_list / schedule_delete /
+    schedule_reset_context / schedule_set_session_mode.
 
     The prompt carries no clock (volatile text would break the cached prefix, and
     a per-turn injection confused small local models), so these tool *results*
@@ -49,18 +89,21 @@ def make_schedule_tools(agent_id: str) -> dict[str, dict]:
         return f"{now:%Y-%m-%d %H:%M} ({now:%A}, local time)"
 
     async def schedule_create(title: str = "", prompt: str = "",
-                              cron: str = "", at: str = "") -> str:
+                              cron: str = "", at: str = "",
+                              fresh_session: bool = False) -> str:
         title = (title or "").strip()
         prompt = (prompt or "").strip()
         if not prompt:
             return "schedule_create needs 'prompt' — the instruction to run at the scheduled time."
+        mode = "fresh" if _truthy(fresh_session) else "shared"
         try:
             if cron.strip():
                 s = schedule_store.create(agent_id, title or prompt[:40], prompt,
-                                          kind="cron", cron_expr=cron.strip())
+                                          kind="cron", cron_expr=cron.strip(),
+                                          session_mode=mode)
             elif at.strip():
                 s = schedule_store.create(agent_id, title or prompt[:40], prompt,
-                                          kind="at", run_at=at.strip())
+                                          kind="at", run_at=at.strip(), session_mode=mode)
             else:
                 return ("Provide either 'cron' (e.g. '0 17 * * *' for 5pm daily) or 'at' "
                         f"(ISO datetime, e.g. '2026-06-29T15:00'). Now is {_now()}.")
@@ -79,7 +122,8 @@ def make_schedule_tools(agent_id: str) -> dict[str, dict]:
             when = s["cronText"] or f"once at {s['runAt']}"
             state = "on" if s["enabled"] else "off"
             nxt = f" next {s['nextRunAt']}" if s["nextRunAt"] else ""
-            out.append(f"- ({s['id']}) {s['title']} — {when} [{state}]{nxt}")
+            ctx = "fresh session each run" if s["sessionMode"] == "fresh" else "shared session"
+            out.append(f"- ({s['id']}) {s['title']} — {when} [{state}; {ctx}]{nxt}")
         return "\n".join(out)
 
     async def schedule_delete(id: str = "") -> str:
@@ -87,7 +131,67 @@ def make_schedule_tools(agent_id: str) -> dict[str, dict]:
             return "schedule_delete needs the schedule 'id' (from schedule_list)."
         return f"deleted {id}" if schedule_store.delete(id) else f"no schedule with id {id!r}"
 
+    def _own(sid: str) -> dict | None:
+        s = schedule_store.get((sid or "").strip())
+        return s if s and s["agentId"] == agent_id else None
+
+    async def schedule_reset_context(id: str = "") -> str:
+        if not _own(id):
+            return f"no schedule of yours with id {id!r} (see schedule_list)."
+        s = reset_context(id.strip())
+        return (f"context reset for '{s['title']}' — its next run starts in a clean session "
+                f"({s['sessionId']}); earlier runs stay in Debug.")
+
+    async def schedule_set_session_mode(id: str = "", fresh_session: bool = True) -> str:
+        if not _own(id):
+            return f"no schedule of yours with id {id!r} (see schedule_list)."
+        mode = "fresh" if _truthy(fresh_session) else "shared"
+        s = schedule_store.update(id.strip(), sessionMode=mode)
+        return (f"'{s['title']}' now uses "
+                + ("a brand-new session on every run (no context carries over)."
+                   if mode == "fresh" else
+                   "one shared session across runs (use schedule_reset_context to clear it)."))
+
     return {
+        "schedule_reset_context": {
+            "fn": schedule_reset_context,
+            "schema": {
+                "type": "function",
+                "function": {
+                    "name": "schedule_reset_context",
+                    "description": (
+                        "Clear a schedule's context window: its next run starts in a brand-new, "
+                        "empty session instead of continuing the shared one. Use when asked to "
+                        "reset / clear the context of a scheduled job. Past runs stay in Debug."),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string", "description": "the schedule id (from schedule_list)"}},
+                        "required": ["id"],
+                    },
+                },
+            },
+        },
+        "schedule_set_session_mode": {
+            "fn": schedule_set_session_mode,
+            "schema": {
+                "type": "function",
+                "function": {
+                    "name": "schedule_set_session_mode",
+                    "description": (
+                        "Choose whether a schedule starts every run in a NEW session "
+                        "(fresh_session=true: nothing carries over between runs) or reuses ONE "
+                        "shared session (fresh_session=false)."),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "the schedule id (from schedule_list)"},
+                            "fresh_session": {"type": "boolean", "description": "true = new session every run"},
+                        },
+                        "required": ["id", "fresh_session"],
+                    },
+                },
+            },
+        },
         "schedule_create": {
             "fn": schedule_create,
             "schema": {
@@ -109,6 +213,7 @@ def make_schedule_tools(agent_id: str) -> dict[str, dict]:
                             "prompt": {"type": "string", "description": "the instruction to run at fire time"},
                             "cron": {"type": "string", "description": "5-field cron for recurring runs, e.g. '0 14 * * *' = 2pm daily, '0 9 * * 1-5' = 9am weekdays"},
                             "at": {"type": "string", "description": "ISO datetime for a one-time run, e.g. '2026-06-29T15:00'"},
+                            "fresh_session": {"type": "boolean", "description": "true = every run starts in a brand-new session (no context carries over between runs). Default false (one shared session)."},
                         },
                         "required": ["prompt"],
                     },
@@ -224,6 +329,8 @@ class SchedulerManager:
         title = schedule["title"]
         text_parts: list[str] = []
         err: str | None = None
+        session_id: str | None = None
+        fresh = schedule.get("sessionMode") == "fresh"
         try:
             agent = agent_store.get_agent(agent_id)
             if not agent:
@@ -236,9 +343,12 @@ class SchedulerManager:
             activity_store.log(agent_id, "note", f"⏰ Scheduled run started: {title}",
                                detail={"scheduleId": sid})
 
+            # Session id per the schedule's mode: shared reuses one id (until a
+            # context reset bumps it), fresh mints a new one for this run.
+            session_id = schedule_store.begin_run(sid) or f"schedule:{sid}"
             async for ev in stream_run(
                 agent, [{"role": "user", "content": schedule["prompt"]}],
-                session_id=f"schedule:{sid}", extra_system=_SCHEDULE_DIRECTIVE,
+                session_id=session_id, extra_system=_SCHEDULE_DIRECTIVE,
             ):
                 t = ev.get("type")
                 if t == "text":
@@ -258,7 +368,11 @@ class SchedulerManager:
             self._inflight.discard(sid)
             result = "".join(text_parts).strip()
             status = "error" if err else "ok"
-            schedule_store.record_run(sid, status, result=result, error=err or "")
+            schedule_store.record_run(sid, status, result=result, error=err or "",
+                                      session_id=session_id)
+            if fresh:
+                # A fresh-mode session is never reused — release what it left.
+                release_session(session_id)
             if err:
                 activity_store.log(agent_id, "error", f"⏰ Scheduled run failed: {title} — {err[:160]}",
                                    detail={"scheduleId": sid})
