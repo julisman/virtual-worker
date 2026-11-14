@@ -32,6 +32,12 @@ from config import db_path, ensure_dir
 _lock = threading.Lock()
 
 KINDS = ("cron", "at")
+# How a schedule's runs share conversation state (see session_id_for):
+#   shared — every run reuses one session id (one Debug session; per-session
+#            state such as unlocked tools / reasoning replay / the pinned clock
+#            carries over between runs) until the context is reset.
+#   fresh  — every run starts a brand-new session (nothing carries over).
+SESSION_MODES = ("shared", "fresh")
 _RESULT_CAP = 4000
 
 
@@ -77,6 +83,18 @@ def _conn() -> sqlite3.Connection:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(schedules)").fetchall()}
     if "deliver_to_json" not in cols:
         conn.execute("ALTER TABLE schedules ADD COLUMN deliver_to_json TEXT")
+    # Guarded migration: context/session control. ``session_epoch`` is bumped by a
+    # context reset (and before every run in fresh mode); it is folded into the
+    # run's session id so a bump starts a clean session. ``last_session_id`` is
+    # the session the latest run used (the "Trace in Debug" target).
+    if "session_mode" not in cols:
+        conn.execute("ALTER TABLE schedules ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'shared'")
+    if "session_epoch" not in cols:
+        conn.execute("ALTER TABLE schedules ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0")
+    if "last_session_id" not in cols:
+        conn.execute("ALTER TABLE schedules ADD COLUMN last_session_id TEXT")
+    if "context_reset_at" not in cols:
+        conn.execute("ALTER TABLE schedules ADD COLUMN context_reset_at TEXT")
     conn.mark_initialized()
     return conn
 
@@ -99,7 +117,23 @@ def _deliver_to(value) -> list[dict]:
     return out
 
 
+def _session_mode(value) -> str:
+    v = (value or "shared").strip().lower() if isinstance(value, str) else "shared"
+    if v not in SESSION_MODES:
+        raise ValueError(f"sessionMode must be one of {SESSION_MODES}")
+    return v
+
+
+def session_id_for(schedule_id: str, epoch: int) -> str:
+    """The session id a run uses. Epoch 0 keeps the historical ``schedule:<id>``
+    so existing Debug traces stay grouped; later epochs get a ``.<n>`` suffix
+    (a dot, not a colon — ``a:b:c`` ids are parsed as chat-channel sessions)."""
+    return f"schedule:{schedule_id}" if not epoch else f"schedule:{schedule_id}.{epoch}"
+
+
 def _row(r: sqlite3.Row) -> dict:
+    keys = r.keys()
+    epoch = (r["session_epoch"] if "session_epoch" in keys else 0) or 0
     return {
         "id": r["id"],
         "agentId": r["agent_id"],
@@ -116,7 +150,11 @@ def _row(r: sqlite3.Row) -> dict:
         "lastResult": r["last_result"],
         "lastError": r["last_error"],
         "runCount": r["run_count"],
-        "deliverTo": _deliver_to(r["deliver_to_json"] if "deliver_to_json" in r.keys() else None),
+        "deliverTo": _deliver_to(r["deliver_to_json"] if "deliver_to_json" in keys else None),
+        "sessionMode": (r["session_mode"] if "session_mode" in keys else None) or "shared",
+        "sessionId": session_id_for(r["id"], epoch),
+        "lastSessionId": r["last_session_id"] if "last_session_id" in keys else None,
+        "contextResetAt": r["context_reset_at"] if "context_reset_at" in keys else None,
         "createdAt": r["created_at"],
         "updatedAt": r["updated_at"],
     }
@@ -142,7 +180,7 @@ def _compute_next(kind: str, cron_expr: str | None, run_at: str | None,
 
 def create(agent_id: str, title: str, prompt: str, *, kind: str = "cron",
            cron_expr: str | None = None, run_at: str | None = None,
-           deliver_to: list | None = None) -> dict:
+           deliver_to: list | None = None, session_mode: str = "shared") -> dict:
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}")
     if kind == "cron":
@@ -156,6 +194,7 @@ def create(agent_id: str, title: str, prompt: str, *, kind: str = "cron",
         run_at = datetime.fromisoformat(run_at).replace(second=0, microsecond=0).isoformat(timespec="seconds")
         cron_expr = None
 
+    session_mode = _session_mode(session_mode)
     sid = uuid.uuid4().hex[:12]
     now = _now_iso()
     nxt = _compute_next(kind, cron_expr, run_at)
@@ -164,10 +203,10 @@ def create(agent_id: str, title: str, prompt: str, *, kind: str = "cron",
         conn.execute(
             """INSERT INTO schedules
                (id, agent_id, title, prompt, kind, cron_expr, run_at, enabled,
-                next_run_at, run_count, deliver_to_json, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,1,?,0,?,?,?)""",
+                next_run_at, run_count, deliver_to_json, session_mode, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,1,?,0,?,?,?,?)""",
             (sid, agent_id, title.strip() or "Untitled", prompt.strip(), kind,
-             cron_expr, run_at, nxt, deliver_json, now, now),
+             cron_expr, run_at, nxt, deliver_json, session_mode, now, now),
         )
     return get(sid)
 
@@ -209,6 +248,7 @@ def update(schedule_id: str, **fields) -> dict | None:
     cron_expr = fields.get("cron", cur["cron"])
     run_at = fields.get("runAt", cur["runAt"])
     deliver_to = _deliver_to(fields.get("deliverTo", cur["deliverTo"]))
+    session_mode = _session_mode(fields.get("sessionMode", cur["sessionMode"]))
 
     if kind == "cron":
         if not cron_expr or not cron.validate(cron_expr):
@@ -224,9 +264,9 @@ def update(schedule_id: str, **fields) -> dict | None:
     with _lock, _conn() as conn:
         conn.execute(
             """UPDATE schedules SET title=?, prompt=?, enabled=?, kind=?, cron_expr=?,
-               run_at=?, next_run_at=?, deliver_to_json=?, updated_at=? WHERE id=?""",
+               run_at=?, next_run_at=?, deliver_to_json=?, session_mode=?, updated_at=? WHERE id=?""",
             (title.strip() or "Untitled", prompt.strip(), 1 if enabled else 0, kind,
-             cron_expr, run_at, nxt, json.dumps(deliver_to), _now_iso(), schedule_id),
+             cron_expr, run_at, nxt, json.dumps(deliver_to), session_mode, _now_iso(), schedule_id),
         )
     return get(schedule_id)
 
@@ -237,7 +277,35 @@ def delete(schedule_id: str) -> bool:
         return cur.rowcount > 0
 
 
-def record_run(schedule_id: str, status: str, result: str = "", error: str = "") -> dict | None:
+def reset_context(schedule_id: str) -> dict | None:
+    """Start the schedule's next run in a clean session: bump the epoch so the
+    session id changes. Nothing is deleted — earlier runs stay in Debug under
+    their old session id. Returns the updated schedule (``None`` if missing)."""
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE schedules SET session_epoch=session_epoch+1, context_reset_at=?, "
+            "updated_at=? WHERE id=?", (_now_iso(), _now_iso(), schedule_id))
+        if cur.rowcount == 0:
+            return None
+    return get(schedule_id)
+
+
+def begin_run(schedule_id: str) -> str | None:
+    """The session id for the run about to start. Fresh mode bumps the epoch
+    first, so every run gets a brand-new session; shared mode reuses it."""
+    cur = get(schedule_id)
+    if not cur:
+        return None
+    if cur["sessionMode"] == "fresh":
+        with _lock, _conn() as conn:
+            conn.execute("UPDATE schedules SET session_epoch=session_epoch+1 WHERE id=?",
+                         (schedule_id,))
+        cur = get(schedule_id) or cur
+    return cur["sessionId"]
+
+
+def record_run(schedule_id: str, status: str, result: str = "", error: str = "",
+               session_id: str | None = None) -> dict | None:
     """Store a run's outcome and advance the schedule (or disable a one-time one)."""
     cur = get(schedule_id)
     if not cur:
@@ -252,8 +320,10 @@ def record_run(schedule_id: str, status: str, result: str = "", error: str = "")
     with _lock, _conn() as conn:
         conn.execute(
             """UPDATE schedules SET last_run_at=?, last_status=?, last_result=?, last_error=?,
-               run_count=run_count+1, next_run_at=?, enabled=?, updated_at=? WHERE id=?""",
+               run_count=run_count+1, next_run_at=?, enabled=?,
+               last_session_id=COALESCE(?, last_session_id), updated_at=? WHERE id=?""",
             (now.isoformat(timespec="seconds"), status, (result or "")[:_RESULT_CAP],
-             (error or "")[:_RESULT_CAP], nxt, 1 if enabled else 0, _now_iso(), schedule_id),
+             (error or "")[:_RESULT_CAP], nxt, 1 if enabled else 0, session_id,
+             _now_iso(), schedule_id),
         )
     return get(schedule_id)

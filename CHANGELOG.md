@@ -8,6 +8,17 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Added
 
+- Debug: a context-window meter. Every run records its peak prompt size (the largest
+  single model call, not the sum across calls), the model's context window, and the
+  prompt size of each call. Runs and sessions show `ctx <used> / <window> · <pct>%`,
+  and an expanded run charts the context growing call by call.
+- Schedules: context control. A schedule can always start a new session
+  (`sessionMode: "fresh"`) or share one session across runs (`"shared"`, the default).
+  **Reset context** (`POST /api/agents/{id}/schedules/{sid}/reset-context`) moves the
+  next run to a clean session and releases the old session's unlocked tools, pinned
+  clock and reasoning sidecars. Agents get `schedule_reset_context` and
+  `schedule_set_session_mode`, and `schedule_create` takes `fresh_session`.
+
 - Deliveries page: pagination (25 / 50 / 100 rows per page, page numbers) with the
   search done on the server, so the whole log is reachable instead of the newest 500.
   `GET /api/deliveries` takes `offset` and `q` and returns `total` and `byStatus`; the
@@ -15,6 +26,9 @@ All notable changes to Virtual Worker are recorded here. The format follows
 - README: a 60-second explainer video with voice-over (`docs/media/explainer.mp4`).
 
 ### Fixed
+
+- Agent loop: the empty-reply nudge reused the `_mode` variable, which switched off
+  window-mode context metering for the rest of that run.
 
 - Browser control: with Settings → Browser → "Never steal focus" and Virtual Worker
   attached to your own Chrome, a new agent tab opens in the background instead of

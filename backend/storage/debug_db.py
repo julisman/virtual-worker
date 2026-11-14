@@ -108,6 +108,18 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     # cache reads by this so it can't clamp to a bogus 100%.
     if "prompt_tokens_sum" not in cols:
         conn.execute("ALTER TABLE debug_runs ADD COLUMN prompt_tokens_sum INTEGER DEFAULT 0")
+    # Guarded migration: context-window usage. ``peak_context_tokens`` is the
+    # LARGEST single-call prompt in the run (how full the window got — unlike the
+    # summed prompt_tokens_sum, which counts the same history once per call);
+    # ``context_window`` is the model's window the run was measured against
+    # (NULL = unknown); ``context_series`` is a JSON list of every call's prompt
+    # size, in order, so the Debug UI can chart how the context grew.
+    if "peak_context_tokens" not in cols:
+        conn.execute("ALTER TABLE debug_runs ADD COLUMN peak_context_tokens INTEGER DEFAULT 0")
+    if "context_window" not in cols:
+        conn.execute("ALTER TABLE debug_runs ADD COLUMN context_window INTEGER")
+    if "context_series" not in cols:
+        conn.execute("ALTER TABLE debug_runs ADD COLUMN context_series TEXT")
     # Guarded migration: chars of a tool result withheld from the model (capped to
     # fit context). 0 = the model saw the whole result. Surfaced in the trace so a
     # "missing field" is explainable.
@@ -183,8 +195,9 @@ def insert_run(run: dict[str, Any], entries: list[dict[str, Any]]) -> None:
                 cache_read, cache_write, total_tokens, cost, tool_calls,
                 first_user_text, last_assistant_text, request_json,
                 response_text, agent_id, reasoning_effort, prompt_tokens_sum,
+                peak_context_tokens, context_window, context_series,
                 created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 run["run_id"], run["session_id"], run["start_time"], run.get("end_time"),
@@ -197,6 +210,11 @@ def insert_run(run: dict[str, Any], entries: list[dict[str, Any]]) -> None:
                 run.get("last_assistant_text"), run.get("request_json"), run.get("response_text"),
                 run.get("agent_id"), run.get("reasoning_effort"),
                 run.get("prompt_tokens_sum", 0),
+                # A single-call (middleware) capture's prompt IS its context size.
+                int(run.get("peak_context_tokens") or run.get("input_tokens") or 0),
+                run.get("context_window") or None,
+                json.dumps([int(x) for x in run["context_series"]])
+                if run.get("context_series") else None,
                 run.get("created_at") or _now_iso(),
             ),
         )
@@ -267,6 +285,24 @@ def _row(r: sqlite3.Row) -> dict[str, Any]:
 
 
 _CACHE_REMOTE_PROVIDERS = {"anthropic", "openai", "openai-compatible", "opencode-go", "codex"}
+
+
+def _context_fields(rr: sqlite3.Row) -> dict[str, Any]:
+    """Context-window usage for one run row. Older rows predate the columns:
+    their ``input_tokens`` (the last call's prompt) stands in for the peak."""
+    keys = rr.keys()
+    peak = (rr["peak_context_tokens"] if "peak_context_tokens" in keys else 0) or 0
+    series: list[int] = []
+    if "context_series" in keys and rr["context_series"]:
+        try:
+            series = [int(x) for x in json.loads(rr["context_series"])]
+        except (TypeError, ValueError):
+            series = []
+    return {
+        "peakContextTokens": peak or (rr["input_tokens"] or 0),
+        "contextWindow": rr["context_window"] if "context_window" in keys else None,
+        "contextSeries": series,
+    }
 
 
 def _cache_stats(rr: sqlite3.Row, run: dict[str, Any]) -> dict[str, int]:
@@ -391,6 +427,7 @@ def list_sessions() -> list[dict[str, Any]]:
                 SUM(is_error)                  AS error_count,
                 SUM(total_tokens)              AS total_tokens,
                 SUM(cost)                      AS total_cost,
+                MAX(COALESCE(NULLIF(peak_context_tokens, 0), input_tokens, 0)) AS peak_ctx,
                 MIN(start_time)                AS first_time,
                 MAX(start_time)                AS last_time
             FROM debug_runs
@@ -401,7 +438,9 @@ def list_sessions() -> list[dict[str, Any]]:
         out = []
         for r in rows:
             last_run = conn.execute(
-                "SELECT model, provider, agent_id, first_user_text, last_assistant_text "
+                "SELECT model, provider, agent_id, first_user_text, last_assistant_text, "
+                "COALESCE(NULLIF(peak_context_tokens, 0), input_tokens, 0) AS last_ctx, "
+                "context_window "
                 "FROM debug_runs WHERE session_id = ? ORDER BY start_time DESC LIMIT 1",
                 (r["session_id"],),
             ).fetchone()
@@ -419,6 +458,11 @@ def list_sessions() -> list[dict[str, Any]]:
                 "agentId": last_run["agent_id"] if last_run else None,
                 "firstMessage": last_run["first_user_text"] if last_run else None,
                 "lastMessage": last_run["last_assistant_text"] if last_run else None,
+                # Context-window usage: the biggest single prompt any run in the
+                # session sent, the latest run's peak, and the latest run's window.
+                "peakContextTokens": r["peak_ctx"] or 0,
+                "lastContextTokens": (last_run["last_ctx"] or 0) if last_run else 0,
+                "contextWindow": last_run["context_window"] if last_run else None,
             })
         return out
     finally:
@@ -531,6 +575,7 @@ def get_session(session_id: str) -> dict[str, Any]:
                 "promptTokensSum": (rr["prompt_tokens_sum"]
                                     if "prompt_tokens_sum" in rr.keys() else 0) or 0,
                 "outputTokens": rr["output_tokens"] or 0,
+                **_context_fields(rr),
                 "cacheRead": rr["cache_read"] or 0,
                 "cacheWrite": rr["cache_write"] or 0,
                 "toolCalls": rr["tool_calls"] or 0,

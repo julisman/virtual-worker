@@ -76,6 +76,11 @@ interface DebugRun {
   inputTokens?: number;
   outputTokens?: number;
   promptTokensSum?: number;
+  // Context-window usage: the biggest single model call's prompt in this run,
+  // the model's window (null = unknown), and every call's prompt size in order.
+  peakContextTokens?: number;
+  contextWindow?: number | null;
+  contextSeries?: number[];
   cacheRead?: number;
   cacheWrite?: number;
   cacheMiss?: CacheMiss;
@@ -100,6 +105,9 @@ interface DebugSession {
   agentId?: string | null;
   firstMessage?: string | null;
   lastMessage?: string | null;
+  peakContextTokens?: number;
+  lastContextTokens?: number;
+  contextWindow?: number | null;
 }
 
 interface Summary {
@@ -136,6 +144,83 @@ function formatDuration(ms?: number | null) {
   const m = Math.floor(ms / 60_000);
   const s = Math.round((ms % 60_000) / 1000);
   return `${m}m ${s}s`;
+}
+
+function formatK(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 100_000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+// --------------------------------------------------------------------------- //
+// Context-window meter
+// --------------------------------------------------------------------------- //
+
+// How full the context window got. Green under 60%, amber to 85%, red beyond —
+// past ~85% a run is close to compaction/trimming and quality usually drops.
+function ctxTone(pct: number | null) {
+  if (pct == null) return { bar: "bg-primary", text: "text-body" };
+  if (pct >= 85) return { bar: "bg-danger", text: "text-danger" };
+  if (pct >= 60) return { bar: "bg-warn", text: "text-warn" };
+  return { bar: "bg-success", text: "text-success" };
+}
+
+function ctxPct(tokens: number, window?: number | null): number | null {
+  return window && window > 0 ? Math.round((tokens / window) * 100) : null;
+}
+
+function ContextMeter({ tokens, window, compact = false, label = "ctx" }: {
+  tokens: number; window?: number | null; compact?: boolean; label?: string;
+}) {
+  if (!tokens) return null;
+  const pct = ctxPct(tokens, window);
+  const tone = ctxTone(pct);
+  const title = window
+    ? `Context window: ${tokens.toLocaleString()} of ${window.toLocaleString()} tokens (${pct}%) — the largest single prompt sent to the model`
+    : `Context: ${tokens.toLocaleString()} tokens — the largest single prompt sent (model window unknown)`;
+  return (
+    <span className="inline-flex items-center gap-1.5 font-mono text-[10px]" title={title}>
+      <span className="text-mute">{label}</span>
+      {pct != null && (
+        <span className={`relative inline-block h-1.5 overflow-hidden rounded-full bg-line ${compact ? "w-10" : "w-16"}`}>
+          <span className={`absolute inset-y-0 left-0 ${tone.bar}`} style={{ width: `${Math.min(100, pct)}%` }} />
+        </span>
+      )}
+      <span className={tone.text}>
+        {formatK(tokens)}{window ? ` / ${formatK(window)}` : ""}{pct != null ? ` · ${pct}%` : ""}
+      </span>
+    </span>
+  );
+}
+
+// Per-call prompt size across one run: shows the context growing as tool
+// results pile up, relative to the window (or the run's own peak if unknown).
+function ContextGrowth({ series, window }: { series: number[]; window?: number | null }) {
+  if (series.length === 0) return null;
+  const peak = Math.max(...series);
+  const scale = window && window > 0 ? window : peak;
+  return (
+    <div className="border-b border-line py-2">
+      <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-mute">
+        <span className="font-semibold uppercase tracking-wide">Context window</span>
+        <ContextMeter tokens={peak} window={window} label="peak" />
+        <span>start {formatK(series[0])}</span>
+        <span>end {formatK(series[series.length - 1])}</span>
+        <span>{series.length} model call{series.length === 1 ? "" : "s"}</span>
+      </div>
+      <div className="relative flex h-12 items-end gap-px rounded-md bg-soft px-1 pt-1"
+        role="img" aria-label={`Prompt size per model call, peak ${peak.toLocaleString()} tokens`}>
+        {series.map((t, i) => {
+          const pct = ctxPct(t, window);
+          return (
+            <span key={i} className={`min-w-[2px] flex-1 rounded-t-sm ${ctxTone(pct).bar}`}
+              style={{ height: `${Math.max(3, Math.min(100, (t / scale) * 100))}%` }}
+              title={`call ${i + 1}: ${t.toLocaleString()} tok${pct != null ? ` (${pct}% of window)` : ""}`} />
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // --------------------------------------------------------------------------- //
@@ -434,11 +519,16 @@ function RunCard({ run, index, errorsOnly, focus = false }: { run: DebugRun; ind
         </div>
         <div className="flex flex-shrink-0 items-center gap-3 font-mono text-[10px] text-body">
           {(run.inputTokens != null || promptSum > 0) && (
-            <span title={promptSum > 0 ? "Cumulative prompt tokens across all model turns" : "Input tokens"}>
+            <span title={promptSum > 0
+              ? `Cumulative prompt tokens summed across all ${(run.contextSeries?.length || 0) || "the"} model calls (each call resends the history) — the ctx meter shows how full the window actually got`
+              : "Input tokens"}>
               {displayedInput.toLocaleString()}↓
             </span>
           )}
           {run.outputTokens != null && <span>{run.outputTokens.toLocaleString()}↑</span>}
+          {(run.peakContextTokens ?? 0) > 0 && (
+            <ContextMeter tokens={run.peakContextTokens ?? 0} window={run.contextWindow} />
+          )}
           <span>{displayedTotal.toLocaleString()} tok</span>
           {cachePct != null && (
             <span
@@ -462,6 +552,9 @@ function RunCard({ run, index, errorsOnly, focus = false }: { run: DebugRun; ind
 
       {expanded && (
         <div className="border-t border-line px-4 py-2">
+          {(run.contextSeries?.length ?? 0) > 0 && (
+            <ContextGrowth series={run.contextSeries ?? []} window={run.contextWindow} />
+          )}
           {run.toolBreakdown && Object.keys(run.toolBreakdown).length > 0 && (
             <div className="mb-1 flex flex-wrap gap-1.5 border-b border-line py-2">
               {Object.entries(run.toolBreakdown).sort((a, b) => b[1] - a[1]).map(([name, count]) => (
@@ -710,6 +803,12 @@ export function DebugPage({ openRequest }: { openRequest?: { id: string; runId?:
                     {s.totalTokens ? <><span>·</span><span>{s.totalTokens.toLocaleString()} tok</span></> : null}
                     {s.totalCost ? <><span>·</span><span className="text-body">{formatCost(s.totalCost)}</span></> : null}
                   </div>
+                  {(s.lastContextTokens ?? 0) > 0 && (
+                    <div className="mt-1" title={s.peakContextTokens && s.peakContextTokens !== s.lastContextTokens
+                      ? `session peak ${s.peakContextTokens.toLocaleString()} tok` : undefined}>
+                      <ContextMeter tokens={s.lastContextTokens ?? 0} window={s.contextWindow} compact label="last ctx" />
+                    </div>
+                  )}
                   <div className="mt-1 font-mono text-[10px] text-mute">{formatTime(s.lastTime)}</div>
                 </button>
               ))}

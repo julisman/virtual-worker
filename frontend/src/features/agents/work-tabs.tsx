@@ -583,6 +583,12 @@ interface ScheduleT {
   enabled: boolean; nextRunAt: string | null; lastRunAt: string | null;
   lastStatus: string | null; lastResult: string | null; lastError: string | null; runCount: number;
   deliverTo: DeliverTarget[];
+  // Context control: "shared" reuses one session across runs (until reset),
+  // "fresh" starts every run in a brand-new session.
+  sessionMode?: "shared" | "fresh";
+  sessionId?: string;          // the session the next run will use
+  lastSessionId?: string | null;  // the session the latest run used
+  contextResetAt?: string | null;
 }
 interface DeliveryT {
   id: string; ts: string; channel: string; target: string | null;
@@ -638,6 +644,8 @@ export function ScheduleView({ agentId, onTrace }: {
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [openResult, setOpenResult] = useState<string | null>(null);
+  const [freshSession, setFreshSession] = useState(false);
+  const [resetNote, setResetNote] = useState<Record<string, string>>({});
   // Delivery picker (PRD-01): which channels a fired run should push its result to.
   const [delOn, setDelOn] = useState<Record<string, boolean>>({});
   const [delTarget, setDelTarget] = useState<Record<string, string>>({});
@@ -704,8 +712,9 @@ export function ScheduleView({ agentId, onTrace }: {
     if (deliverTo === null) return;  // a target was missing / webhook failed
     setBusy(true);
     try {
-      await apiPost(`/api/agents/${encodeURIComponent(agentId)}/schedules`, { title, prompt, ...sched, deliverTo });
-      setTitle(""); setPrompt(""); setDelOn({}); setDelTarget({});
+      await apiPost(`/api/agents/${encodeURIComponent(agentId)}/schedules`, {
+        title, prompt, ...sched, deliverTo, sessionMode: freshSession ? "fresh" : "shared" });
+      setTitle(""); setPrompt(""); setDelOn({}); setDelTarget({}); setFreshSession(false);
       await load();
     } catch (e) { setErr(e instanceof Error ? e.message : "Could not create schedule"); }
     finally { setBusy(false); }
@@ -726,6 +735,21 @@ export function ScheduleView({ agentId, onTrace }: {
       setOpenResult(s.id);  // reveal the result once it's back
       load();
     }
+  };
+  const setSessionMode = async (s: ScheduleT, mode: "shared" | "fresh") => {
+    await apiJson(`/api/agents/${encodeURIComponent(agentId)}/schedules/${s.id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionMode: mode }),
+    }).catch(() => {});
+    load();
+  };
+  const resetContext = async (s: ScheduleT) => {
+    try {
+      await apiPost(`/api/agents/${encodeURIComponent(agentId)}/schedules/${s.id}/reset-context`, {});
+      setResetNote((n) => ({ ...n, [s.id]: "Context cleared — the next run starts in a new session." }));
+    } catch {
+      setResetNote((n) => ({ ...n, [s.id]: "Could not reset the context." }));
+    }
+    load();
   };
   const remove = async (s: ScheduleT) => {
     await apiJson(`/api/agents/${encodeURIComponent(agentId)}/schedules/${s.id}`, { method: "DELETE" }).catch(() => {});
@@ -776,6 +800,15 @@ export function ScheduleView({ agentId, onTrace }: {
               {busy ? "Adding…" : "Add schedule"}
             </button>
           </div>
+          {/* Context per run — shared session (default) or a brand-new one each run. */}
+          <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-line bg-soft p-3">
+            <input type="checkbox" className="mt-0.5 accent-primary" checked={freshSession}
+              onChange={(e) => setFreshSession(e.target.checked)} />
+            <span>
+              <span className="block text-xs font-semibold text-ink">Always start a new session</span>
+              <span className="block text-[11px] text-mute">Every run begins with an empty context; nothing carries over from earlier runs. Off = runs share one session, which you can reset any time.</span>
+            </span>
+          </label>
           {/* Deliver result to — explicit, opt-in destinations (PRD-01). */}
           <div className="rounded-xl border border-line bg-soft p-3">
             <p className="text-[10px] font-extrabold uppercase tracking-wide text-mute">Deliver result to</p>
@@ -817,8 +850,8 @@ export function ScheduleView({ agentId, onTrace }: {
               </span>
               <div className="ml-auto flex shrink-0 items-center gap-1">
                 {onTrace && s.runCount > 0 && (
-                  <button onClick={() => onTrace(`schedule:${s.id}`)}
-                    title="Open this schedule's runs in the Debug tab to trace every step (model calls, tool calls)"
+                  <button onClick={() => onTrace(s.lastSessionId || s.sessionId || `schedule:${s.id}`)}
+                    title="Open this schedule's latest session in the Debug tab to trace every step (model calls, tool calls, context usage)"
                     className="rounded-full border border-pressed px-2.5 py-1 text-[11px] font-medium text-body hover:bg-soft hover:text-ink">
                     Trace in Debug
                   </button>
@@ -840,7 +873,28 @@ export function ScheduleView({ agentId, onTrace }: {
                 </span>
               )}
               {s.runCount > 0 && <span>{s.runCount} run{s.runCount === 1 ? "" : "s"}</span>}
+              <span className="ml-auto inline-flex items-center gap-1">
+                <button
+                  onClick={() => setSessionMode(s, s.sessionMode === "fresh" ? "shared" : "fresh")}
+                  title={s.sessionMode === "fresh"
+                    ? "Every run starts in a brand-new session. Click to share one session across runs."
+                    : "Runs share one session. Click to start a brand-new session on every run."}
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                    s.sessionMode === "fresh" ? "border-primary bg-primary-soft text-primary-deep" : "border-pressed text-body hover:text-ink"}`}>
+                  {s.sessionMode === "fresh" ? "new session each run" : "shared session"}
+                </button>
+                {s.sessionMode !== "fresh" && (
+                  <button onClick={() => resetContext(s)}
+                    title="Clear this schedule's context: the next run starts in a new, empty session. Past runs stay in Debug."
+                    className="rounded-full border border-pressed px-2 py-0.5 text-[10px] font-medium text-body hover:bg-soft hover:text-ink">
+                    Reset context
+                  </button>
+                )}
+              </span>
             </div>
+            {resetNote[s.id] && (
+              <p className="mt-1 pl-[18px] text-[11px] text-success">{resetNote[s.id]}</p>
+            )}
             {(s.deliverTo?.length > 0) && (
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-[18px] text-[11px]">
                 <span className="text-mute">delivers to</span>

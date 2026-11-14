@@ -147,7 +147,8 @@ def test_compose_persona_is_stable_and_time_free(store):
 def test_schedule_tools(store):
     from agent.scheduler import make_schedule_tools
     tools = make_schedule_tools("a1")
-    assert set(tools) == {"schedule_create", "schedule_list", "schedule_delete"}
+    assert set(tools) == {"schedule_create", "schedule_list", "schedule_delete",
+                          "schedule_reset_context", "schedule_set_session_mode"}
     out = asyncio.run(tools["schedule_create"]["fn"](title="t", prompt="do it", cron="0 8 * * *"))
     assert "scheduled" in out.lower()
     listed = asyncio.run(tools["schedule_list"]["fn"]())
@@ -155,3 +156,68 @@ def test_schedule_tools(store):
     # missing schedule + missing prompt are handled gracefully
     assert "needs" in asyncio.run(tools["schedule_create"]["fn"](prompt=""))
     assert "no schedule" in asyncio.run(tools["schedule_delete"]["fn"](id="nope"))
+
+
+# ─── context / session control ───────────────────────────────────────────────
+
+def test_session_modes_and_reset(store):
+    s = store.create("a1", "t", "do it", kind="cron", cron_expr="0 8 * * *")
+    assert s["sessionMode"] == "shared"
+    assert s["sessionId"] == f"schedule:{s['id']}"     # historical id kept
+    # shared: the same session every run
+    assert store.begin_run(s["id"]) == store.begin_run(s["id"]) == f"schedule:{s['id']}"
+    # a context reset moves the next run to a new session (dot, not colon)
+    r = store.reset_context(s["id"])
+    assert r["sessionId"] == f"schedule:{s['id']}.1" and r["contextResetAt"]
+    assert store.begin_run(s["id"]) == f"schedule:{s['id']}.1"
+    # fresh: a brand-new session per run
+    store.update(s["id"], sessionMode="fresh")
+    a, b = store.begin_run(s["id"]), store.begin_run(s["id"])
+    assert a != b and a.startswith(f"schedule:{s['id']}.")
+    store.record_run(s["id"], "ok", result="x", session_id=b)
+    assert store.get(s["id"])["lastSessionId"] == b
+    with pytest.raises(ValueError):
+        store.update(s["id"], sessionMode="bogus")
+    assert store.reset_context("missing") is None
+
+
+def test_fire_uses_fresh_session_and_releases_state(store, monkeypatch):
+    from agent import compose, loop, runner, scheduler
+    from storage import agent_store
+    monkeypatch.setattr(agent_store, "get_agent", lambda aid: {"id": aid})
+    seen: list[str] = []
+
+    async def fake_stream_run(agent, messages, *, session_id, extra_system=None, **kw):
+        seen.append(session_id)
+        loop._SESSION_UNLOCKS[session_id] = {"mcp__x__y"}
+        compose.clock_line(session_id)
+        yield {"type": "text", "delta": "done"}
+
+    monkeypatch.setattr(runner, "stream_run", fake_stream_run)
+    s = store.create("a1", "t", "do it", kind="cron", cron_expr="0 8 * * *",
+                     session_mode="fresh")
+    mgr = scheduler.SchedulerManager()
+    asyncio.run(mgr._fire(store.get(s["id"])))
+    asyncio.run(mgr._fire(store.get(s["id"])))
+    assert len(set(seen)) == 2                       # a new session each run
+    assert store.get(s["id"])["lastSessionId"] == seen[-1]
+    for sid in seen:                                 # nothing left behind
+        assert sid not in loop._SESSION_UNLOCKS
+        assert sid not in compose._clock_cache
+
+
+def test_reset_context_tool_is_owner_scoped(store):
+    from agent import loop
+    from agent.scheduler import make_schedule_tools
+    s = store.create("a1", "t", "do it", kind="cron", cron_expr="0 8 * * *")
+    loop._SESSION_UNLOCKS[s["sessionId"]] = {"mcp__x__y"}
+    other = make_schedule_tools("a2")
+    assert "no schedule of yours" in asyncio.run(
+        other["schedule_reset_context"]["fn"](id=s["id"]))
+    mine = make_schedule_tools("a1")
+    out = asyncio.run(mine["schedule_reset_context"]["fn"](id=s["id"]))
+    assert "context reset" in out and f"schedule:{s['id']}.1" in out
+    assert s["sessionId"] not in loop._SESSION_UNLOCKS
+    out = asyncio.run(mine["schedule_set_session_mode"]["fn"](id=s["id"], fresh_session="true"))
+    assert "brand-new session" in out
+    assert store.get(s["id"])["sessionMode"] == "fresh"

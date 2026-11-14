@@ -68,6 +68,11 @@ def _table_exists(conn, name: str) -> bool:
     return row is not None
 
 
+def _schedule_id(session_id: str) -> str:
+    """"schedule:<id>" or "schedule:<id>.<n>" → "<id>"."""
+    return session_id.split(":", 1)[1].split(".", 1)[0]
+
+
 def _session_agent_map(conn, session_ids: set[str]) -> dict[str, Optional[str]]:
     """Map each session id to a local agent id (or None for external/adhoc)."""
     out: dict[str, Optional[str]] = {}
@@ -81,7 +86,7 @@ def _session_agent_map(conn, session_ids: set[str]) -> dict[str, Optional[str]]:
             chat_ids.add(sid)
             out[sid] = None
         elif sid.startswith("schedule:"):
-            sched_ids.add(sid.split(":", 1)[1])
+            sched_ids.add(_schedule_id(sid))
             out[sid] = None
         else:
             out[sid] = None  # external (provider:model) or adhoc
@@ -107,7 +112,7 @@ def _session_agent_map(conn, session_ids: set[str]) -> dict[str, Optional[str]]:
         by_id = {r["id"]: r["agent_id"] for r in rows}
         for sid in session_ids:
             if sid.startswith("schedule:"):
-                aid = by_id.get(sid.split(":", 1)[1])
+                aid = by_id.get(_schedule_id(sid))
                 if aid:
                     out[sid] = aid
     return out
@@ -131,7 +136,12 @@ def _agent_session_ids(conn, agent_id: str) -> set[str]:
         rows = conn.execute(
             "SELECT id FROM schedules WHERE agent_id = ?", (agent_id,)
         ).fetchall()
-        out.update(f"schedule:{r['id']}" for r in rows)
+        sched = {r["id"] for r in rows}
+        # A schedule's runs live under "schedule:<id>" or, after a context reset /
+        # in fresh-session mode, "schedule:<id>.<n>" (see schedule_store.session_id_for).
+        out.update(sid for sid in sessions
+                   if sid.startswith("schedule:") and _schedule_id(sid) in sched)
+        out.update(f"schedule:{i}" for i in sched)
     return out
 
 

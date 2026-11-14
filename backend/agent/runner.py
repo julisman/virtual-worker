@@ -138,6 +138,17 @@ async def stream_run(
             logging.getLogger(__name__).info(
                 "context window unresolved for model %s — falling back to chars mode", model)
             context_mode = "chars"
+    # The window is also reported to the Debug trace in chars mode, so every
+    # run shows how full its context got (peak prompt / window). Reporting
+    # only: no network probe here, and it never changes how the loop trims.
+    report_window = window
+    if not report_window:
+        try:
+            report_window, _ = cw.resolve_window_sync(
+                model=model, provider_id=(target or {}).get("provider") if target else None,
+                guardrail_context_tokens=g.get("contextTokens") or 0)
+        except Exception:  # noqa: BLE001 — a report-only lookup never breaks a run
+            report_window = None
 
     tool_allow = a.get("mcpToolAllow") or {}
     mcp_servers = []
@@ -167,6 +178,7 @@ async def stream_run(
             context_mode=context_mode,
             context_window=window,
             context_window_source=window_source,
+            report_window=report_window,
             effective_reserve=eff_reserve,
             compact_keep=g.get("compactKeep") or "messages",
             compact_keep_amount=g.get("compactKeepAmount") or 0,
