@@ -47,6 +47,11 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Fixed
 
+- Tests: the suite ran against the developer's real data dir and model port. Runtime
+  tests wrote into the real `llama-server.log`, deleted `llama-server.json`, and a
+  forced start killed the live model server on port 8080 mid-answer.
+  `tests/conftest.py` now points `VW_HOME` at a temp dir and `LLAMA_PORT` at an unused
+  port before anything imports `config`.
 - Chat channels: `/clear` and `/compact` now work on Telegram, WhatsApp, Discord and Slack.
   Before this fix they reached the model as plain text. `/clear` is an alias of `/reset` and `/new`;
   `/compact` folds the older turns of the conversation into one recap and keeps the last
