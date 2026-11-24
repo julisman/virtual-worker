@@ -18,7 +18,7 @@ interface Status {
 }
 interface DiscoverModel { id: string; fits: boolean | null; paramsB: number | null; downloads: number }
 interface DetailFile { filename: string; sizeBytes?: number; quant: string | null; fit: string }
-interface LocalModel { repo: string; path: string; backend: string; filename: string; sizeBytes?: number }
+interface LocalModel { repo: string; path: string; backend: string; filename: string; sizeBytes?: number; textGenerative?: boolean }
 interface Job { id: string; repo: string; filename: string | null; status: string; error: string | null; percent: number | null; receivedBytes: number; totalBytes: number }
 interface Template { id: string; name: string; description?: string; builtin?: boolean; category?: string; variables?: { key: string; label: string; type: string; default?: string; required?: boolean }[] }
 interface Provider { id: string; label: string; byok: boolean; models: string[]; hasKey?: boolean; configured?: boolean }
@@ -158,8 +158,9 @@ function ModelStep({ status, onReady }: { status: Status; onReady: (provider: { 
 
   useEffect(() => {
     if (mode !== "existing") return;
-    // Hide projector files, embedding models and other things that can't answer a chat.
-    const chatty = (m: LocalModel) => !/mmproj|embed|bge-|e5-|minilm|whisper|parakeet|tts/i.test(`${m.repo}/${m.filename}`);
+    // Hide projector / LoRA adapter files, embedding models and other things that can't answer a chat.
+    const chatty = (m: LocalModel) => m.textGenerative !== false
+      && !/mmproj|embed|bge-|e5-|minilm|whisper|parakeet|tts/i.test(`${m.repo}/${m.filename}`);
     apiJson<{ models: LocalModel[] }>("/api/hub/local")
       .then((d) => setLocal(d.models.filter(chatty).sort((a, b) => (a.backend === "mlx" ? -1 : 1) - (b.backend === "mlx" ? -1 : 1))))
       .catch(() => setLocal([]));

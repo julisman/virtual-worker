@@ -295,7 +295,7 @@ def _explain(error: str | None) -> str | None:
     """Prefix a known load failure with what to do about it."""
     if error and "unknown model architecture" in error:
         return ("This model needs a newer llama.cpp than the one installed. Update llama.cpp "
-                "in Settings → Engines, then activate the model again.\n\n" + error)
+                "in Settings → Inference engines, then activate the model again.\n\n" + error)
     return error
 
 

@@ -128,6 +128,9 @@ def test_hub_scan_tags_kind(monkeypatch, tmp_path):
     assert by_name["Qwen-Q4.gguf"]["ggufKind"] == "model"
     assert by_name["Qwen-lora-F16.gguf"]["ggufKind"] == "adapter"
     assert by_name["Qwen-lora-F16.gguf"]["arch"] == "qwen35"
+    # Evals / onboarding only offer things that can answer a chat
+    assert by_name["Qwen-Q4.gguf"]["textGenerative"] is True
+    assert by_name["Qwen-lora-F16.gguf"]["textGenerative"] is False
 
 
 # --------------------------------------------------------------------------- #

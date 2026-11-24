@@ -420,6 +420,7 @@ def _scan_hf_cache() -> list[dict]:
                     # "adapter" (LoRA, needs a base of the same arch) or "mmproj"
                     # (vision projector) files can't be activated on their own.
                     "ggufKind": kind["kind"],
+                    "textGenerative": kind["kind"] == "model",  # Evals / onboarding pickers
                     "arch": kind["arch"],
                     # thinking levels the chat template can be pinned to at load
                     "thinkingOptions": kind["thinking"],

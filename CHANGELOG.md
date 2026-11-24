@@ -51,6 +51,8 @@ All notable changes to Virtual Worker are recorded here. The format follows
   for up to five minutes, because the exited process was never reaped. It now fails
   at once with the server's error, and an `unknown model architecture` error says to
   update llama.cpp.
+- Evals and onboarding no longer offer LoRA adapter or projector GGUFs as chat
+  models (`textGenerative` is now set for GGUF files too).
 - Engines: installing a llama.cpp release dropped the tarball's library symlinks
   (`libllama.1.dylib → libllama.1.0.0.dylib`), which are the names llama-server links
   against, so the installed server couldn't start. They are now recreated as

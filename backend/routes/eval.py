@@ -285,7 +285,7 @@ async def promote(run_id: str, body: PromoteBody):
     from runtime import llama_manager
     try:
         return await llama_manager.start(path, ctx=body.ctx, force=True)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, ValueError) as exc:  # e.g. an adapter file, not a model
         raise HTTPException(400, str(exc))
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
