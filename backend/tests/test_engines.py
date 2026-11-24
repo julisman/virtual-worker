@@ -196,3 +196,91 @@ def test_extract_llama_release_flattens_and_filters(tmp_path):
     assert not (tmp_path / "evil.dylib").exists()  # never escaped dest
     import os as _os
     assert _os.access(dest / "llama-server", _os.X_OK)
+
+
+# --------------------------------------------------------------------------- #
+# llama.cpp builds (macOS): newest upstream build, not the lagging "latest" release
+# --------------------------------------------------------------------------- #
+
+def test_newest_build_skips_drafts_and_missing_assets(monkeypatch):
+    import platform
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    rels = [
+        {"tag_name": "b12700", "draft": True,
+         "assets": [{"name": "llama-b12700-bin-macos-arm64.tar.gz"}]},
+        {"tag_name": "b12699", "assets": [{"name": "llama-b12699-bin-win-cuda.zip"}]},
+        {"tag_name": "b12698", "prerelease": True,
+         "assets": [{"name": "llama-b12698-bin-macos-arm64.tar.gz"}]},
+        {"tag_name": "v1.0.0", "assets": [{"name": "llama-v1.0.0-bin-macos-arm64.tar.gz"}]},
+    ]
+    assert engines._newest_build(rels) == "b12698"
+    assert engines._newest_build([]) is None
+
+
+def test_llamacpp_installed_reports_build_number(monkeypatch):
+    import subprocess as sp
+
+    def fake_run(text):
+        return lambda *a, **k: sp.CompletedProcess(a, 0, stdout="", stderr=text)
+
+    monkeypatch.setattr(config, "llama_bin", lambda: "/x/llama-server")
+    monkeypatch.setattr(engines.subprocess, "run",
+                        fake_run("version: 1.0.0 (build 12359, commit b1b770d90)"))
+    assert engines._llamacpp_installed() == "12359"
+    assert engines._update_available("12359", "b12669", "brew") is True
+    monkeypatch.setattr(engines.subprocess, "run", fake_run("version: 9301 (1c0f6db54)"))
+    assert engines._llamacpp_installed() == "9301"
+
+
+def test_macos_updates_llamacpp_from_builds_in_dev_mode(monkeypatch):
+    import platform
+    monkeypatch.setattr(config, "PACKAGED", False)
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    assert engines._can_update(engines._by_key("llama.cpp")) is True
+
+    async def fake_release():
+        return {"ok": True, "output": "installed"}
+    monkeypatch.setattr(engines, "_update_llamacpp_release", fake_release)
+    assert asyncio.run(engines.update("llama.cpp"))["output"] == "installed"
+
+
+def test_extract_llama_release_keeps_dylib_symlinks(tmp_path):
+    """Release builds link @rpath/libllama.1.dylib, shipped as a symlink to
+    libllama.1.0.0.dylib — dropping links leaves a llama-server that can't start."""
+    import io
+    import os
+    import tarfile
+
+    tar_path = tmp_path / "rel.tar.gz"
+    with tarfile.open(tar_path, "w:gz") as tf:
+        def add_file(name, data=b"x"):
+            ti = tarfile.TarInfo(name)
+            ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+
+        def add_link(name, target):
+            ti = tarfile.TarInfo(name)
+            ti.type = tarfile.SYMTYPE
+            ti.linkname = target
+            tf.addfile(ti)
+
+        add_file("llama-b1/llama-server", b"bin")
+        add_file("llama-b1/libllama.1.0.0.dylib", b"lib")
+        add_link("llama-b1/libllama.1.dylib", "libllama.1.0.0.dylib")
+        add_link("llama-b1/libllama.dylib", "libllama.1.dylib")
+        add_link("llama-b1/libevil.dylib", "../../outside.dylib")   # must be skipped
+        add_link("llama-b1/libabs.dylib", "/etc/passwd")            # must be skipped
+        add_link("llama-b1/README.md", "libllama.1.dylib")          # not a wanted file
+
+    dest = tmp_path / "engine"
+    engines._extract_llama_release(tar_path, dest)
+    assert os.readlink(dest / "libllama.1.dylib") == "libllama.1.0.0.dylib"
+    assert (dest / "libllama.dylib").read_bytes() == b"lib"  # chain resolves in-folder
+    assert not (dest / "libevil.dylib").exists() and not (dest / "libevil.dylib").is_symlink()
+    assert not (dest / "libabs.dylib").is_symlink()
+    assert not (dest / "README.md").exists()
+    assert os.access(dest / "llama-server", os.X_OK)
+
+    # re-installing over an existing engine replaces files and links cleanly
+    engines._extract_llama_release(tar_path, dest)
+    assert os.readlink(dest / "libllama.1.dylib") == "libllama.1.0.0.dylib"

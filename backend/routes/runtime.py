@@ -25,6 +25,8 @@ class StartRequest(BaseModel):
     force: bool = False        # take over the port from an existing llama-server
     mtp: bool = False          # llama.cpp: self-speculate off the embedded MTP head
     mtpNMax: int | None = None  # MTP draft depth (default 3)
+    adapter: str | None = None  # LoRA adapter (.gguf / MLX dir) served on top of the base
+    thinking: str | None = None  # llama.cpp: pin the template's thinking (off/low/medium/high)
 
 
 @router.get("/status")
@@ -37,8 +39,8 @@ async def start(req: StartRequest):
     try:
         kw = {} if req.mtpNMax is None else {"mtp_n_max": req.mtpNMax}
         return await mgr.start(req.path, ctx=req.ctx, ngl=req.ngl, force=req.force,
-                               mtp=req.mtp, **kw)
-    except FileNotFoundError as exc:
+                               adapter=req.adapter, mtp=req.mtp, thinking=req.thinking, **kw)
+    except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc

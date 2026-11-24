@@ -42,6 +42,9 @@ interface LocalModel {
   maxCtx?: number | null;          // model's trained max context (from GGUF/config)
   recommendedCtx?: number | null;  // largest that likely fits this machine, ≤ maxCtx
   mtpCapable?: boolean;            // GGUF has an embedded MTP head → llama.cpp can self-speculate
+  ggufKind?: "model" | "adapter" | "mmproj"; // adapters/projectors can't be activated on their own
+  arch?: string | null;            // GGUF general.architecture — a LoRA only fits a base of the same arch
+  thinkingOptions?: string[];      // thinking levels the chat template can be pinned to (off/low/medium/high)
 }
 interface DownloadJob {
   id: string; source: string; repo: string; filename: string | null;
@@ -55,6 +58,8 @@ interface RuntimeStatus {
   modelName: string | null; modelPath: string | null; quant: string | null;
   ctx: number | null; binAvailable: boolean; binLlamacpp: boolean; binMlx: boolean; binMlxVlm: boolean;
   mtp?: boolean; mtpNMax?: number;
+  adapter?: string | null;
+  thinking?: string | null;
   error: string | null;
 }
 
@@ -225,6 +230,10 @@ export function HubPage() {
   const [ctxByPath, setCtxByPath] = useState<Record<string, number>>({});
   // Per-model MTP (multi-token-prediction) speculative decoding — off by default.
   const [mtpByPath, setMtpByPath] = useState<Record<string, boolean>>({});
+  // Per-model LoRA adapter (GGUF, same architecture) applied with --lora — none by default.
+  const [loraByPath, setLoraByPath] = useState<Record<string, string>>({});
+  // Per-model thinking level pinned in the chat template ("" = the template's own default).
+  const [thinkingByPath, setThinkingByPath] = useState<Record<string, string>>({});
   const rtPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ---- capability ---- //
@@ -378,9 +387,11 @@ export function HubPage() {
     const path = m.path!;
     const ctx = ctxByPath[path] ?? defaultCtxFor(m);
     const mtp = !!(m.mtpCapable && mtpByPath[path]);
+    const adapter = loraByPath[path] || null;
+    const thinking = thinkingByPath[path] || null;
     setActivating(path);
     try {
-      await apiPost("/api/runtime/start", { path, force, ctx, mtp });
+      await apiPost("/api/runtime/start", { path, force, ctx, mtp, adapter, thinking });
       // Poll until the model is actually healthy (MLX can take a while to load),
       // updating the UI each tick so it flips to Active without a manual refresh.
       for (let i = 0; i < 240; i++) {
@@ -406,7 +417,7 @@ export function HubPage() {
     } finally {
       setActivating(null);
     }
-  }, [ctxByPath, mtpByPath]);
+  }, [ctxByPath, mtpByPath, loraByPath, thinkingByPath]);
 
   const stopRuntime = useCallback(async () => {
     await apiPost("/api/runtime/stop", {}).catch(() => {});
@@ -437,6 +448,8 @@ export function HubPage() {
               <span className="size-2 rounded-full bg-success" />
               Active: <span className="font-mono font-medium">{runtime.modelName}</span>
               {runtime.ctx ? <span className="text-success/70">{Math.round(runtime.ctx / 1024)}K ctx</span> : null}
+              {runtime.adapter ? <span className="text-success/70" title={runtime.adapter}>+ LoRA {runtime.adapter.split("/").pop()?.replace(/\.gguf$/, "")}</span> : null}
+              {runtime.thinking ? <span className="text-success/70" title="Thinking level pinned in the chat template">· thinking {runtime.thinking}</span> : null}
               {runtime.mtp ? <span className="text-success/70" title={`Multi-token prediction on (draft depth ${runtime.mtpNMax ?? 3})`}>· MTP</span> : null}
               {runtime.verifying ? <span className="text-success/70" title="Confirming the model can generate…">· verifying…</span> : null}
               <button onClick={stopRuntime} title="Stop" className="ml-1 text-success/70 hover:text-success">✕</button>
@@ -619,6 +632,15 @@ export function HubPage() {
                   </span>
                 )}
                 {m.multimodal && <span className="rounded-full bg-info/10 px-2 py-0.5 text-[10px] text-info">vision</span>}
+                {m.ggufKind === "adapter" && (
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary"
+                    title="LoRA adapter — pick it from a base model's adapter menu (same architecture), then Activate the base">
+                    LoRA{m.arch ? ` · ${m.arch}` : ""}
+                  </span>
+                )}
+                {m.ggufKind === "mmproj" && (
+                  <span className="rounded-full bg-soft px-2 py-0.5 text-[10px] text-mute" title="Vision projector — used alongside its model, not on its own">projector</span>
+                )}
                 {(() => {
                   const v = m.backend !== "mlx"
                     ? { trainable: false, reason: "GGUF — inference only" }
@@ -632,7 +654,10 @@ export function HubPage() {
                 })()}
                 <span className="font-mono text-xs text-body">{fmtBytes(m.sizeBytes)}</span>
                 {/* Activate in the matching engine (llama.cpp / mlx / mlx-vlm) */}
-                {m.path && (() => {
+                {m.path && m.ggufKind !== "adapter" && m.ggufKind !== "mmproj" && (() => {
+                  const loras = m.backend !== "mlx" && m.arch
+                    ? local.filter((a) => a.ggufKind === "adapter" && a.arch === m.arch && a.path)
+                    : [];
                   const binOk = m.backend !== "mlx" ? runtime?.binLlamacpp
                     : m.multimodal ? runtime?.binMlxVlm : runtime?.binMlx;
                   const missingMsg = m.backend !== "mlx" ? "llama-server not installed"
@@ -656,6 +681,25 @@ export function HubPage() {
                           />
                           MTP
                         </label>
+                      )}
+                      {/* Optional LoRA adapter — only those built for this model's architecture */}
+                      {loras.length > 0 && (
+                        <Select
+                          value={loraByPath[m.path!] ?? ""}
+                          onChange={(v) => setLoraByPath((p) => ({ ...p, [m.path!]: v }))}
+                          options={[{ id: "", label: "No adapter" },
+                            ...loras.map((a) => ({ id: a.path!, label: `+ ${a.filename.replace(/\.gguf$/, "")}` }))]}
+                        />
+                      )}
+                      {/* Thinking level — only for templates with a thinking knob
+                          (enable_thinking / reasoning_effort); "" keeps the template default */}
+                      {m.backend !== "mlx" && (m.thinkingOptions?.length ?? 0) > 0 && (
+                        <Select
+                          value={thinkingByPath[m.path!] ?? ""}
+                          onChange={(v) => setThinkingByPath((p) => ({ ...p, [m.path!]: v }))}
+                          options={[{ id: "", label: "Thinking: default" },
+                            ...m.thinkingOptions!.map((t) => ({ id: t, label: `Thinking: ${t}` }))]}
+                        />
                       )}
                       {/* Context window for this model — defaults to its memory-safe max */}
                       {m.backend !== "mlx" && (

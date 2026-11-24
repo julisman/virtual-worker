@@ -404,6 +404,7 @@ def _scan_hf_cache() -> list[dict]:
                 except OSError:
                     size = None
                 ctx = model_meta.ctx_info(str(f), "llamacpp", size)
+                kind = model_meta.gguf_kind(str(f), size)
                 items.append({
                     "source": "hf-cache",
                     "backend": "llamacpp",
@@ -416,6 +417,12 @@ def _scan_hf_cache() -> list[dict]:
                     "maxCtx": ctx["maxCtx"],
                     "recommendedCtx": ctx["recommendedCtx"],
                     "mtpCapable": ctx.get("mtpCapable", False),
+                    # "adapter" (LoRA, needs a base of the same arch) or "mmproj"
+                    # (vision projector) files can't be activated on their own.
+                    "ggufKind": kind["kind"],
+                    "arch": kind["arch"],
+                    # thinking levels the chat template can be pinned to at load
+                    "thinkingOptions": kind["thinking"],
                 })
     return items
 
