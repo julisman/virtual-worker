@@ -309,3 +309,72 @@ def test_attachments_load_only_after_policy_allows(env):
         await m.stop()
 
     asyncio.run(main())
+
+
+def test_command_name_parsing():
+    from channels.manager import command_name
+    assert command_name("/Clear") == "/clear"
+    assert command_name("  /compact@MyBot  ") == "/compact"
+    assert command_name("/reset please") == "/reset"
+    assert command_name("hello /clear") == ""
+    assert command_name(None) == ""
+
+
+def _seed(session_id, n, size=400):
+    for i in range(n):
+        chat_store.append_message(session_id, "user" if i % 2 == 0 else "assistant",
+                                  f"turn {i} " + "x" * size, title="Bob")
+
+
+def test_clear_command_wipes_conversation(env):
+    m, acct = env["m"], env["acct"]
+    sid = f"fake:{acct['id']}:628111"
+    _seed(sid, 4)
+
+    async def t(a, messages, session_id):
+        raise AssertionError("the model must not see /clear")
+
+    ad = asyncio.run(_run(m, acct, _msg(acct, "/clear", event="c"), turn=t))
+    assert ad.sent[-1][1] == "Conversation reset."
+    assert chat_store.get_session(sid) is None
+
+
+def test_compact_command_folds_older_turns(env, monkeypatch):
+    m, acct = env["m"], env["acct"]
+    sid = f"fake:{acct['id']}:628111"
+    _seed(sid, 10)
+    seen = {}
+
+    async def fake_summarize(agent, messages):
+        seen["n"] = len(messages)
+        return "The user and assistant discussed ten things."
+
+    monkeypatch.setattr(mgr_mod, "_summarize", fake_summarize)
+
+    async def t(a, messages, session_id):
+        raise AssertionError("the model must not see /compact")
+
+    ad = asyncio.run(_run(m, acct, _msg(acct, "/compact", event="k"), turn=t))
+    assert "Compacted 6 earlier messages" in ad.sent[-1][1]
+    assert seen["n"] == 6
+    msgs = chat_store.get_session(sid)["messages"]
+    assert len(msgs) == 1 + mgr_mod.COMPACT_KEEP_RECENT
+    assert msgs[0]["meta"]["compacted"] and "ten things" in msgs[0]["content"]
+    assert msgs[-1]["content"].startswith("turn 9")
+    # The recap is what the next turn's history starts with.
+    hist = mgr_mod.load_history(sid)
+    assert hist[0]["content"].startswith(mgr_mod.COMPACT_RECAP_PREFIX)
+
+
+def test_compact_short_conversation_is_a_noop(env, monkeypatch):
+    m, acct = env["m"], env["acct"]
+    sid = f"fake:{acct['id']}:628111"
+    _seed(sid, 3, size=10)
+
+    async def never(agent, messages):
+        raise AssertionError("should not summarize")
+
+    monkeypatch.setattr(mgr_mod, "_summarize", never)
+    ad = asyncio.run(_run(m, acct, _msg(acct, "/compact", event="k2")))
+    assert "Nothing to compact" in ad.sent[-1][1]
+    assert len(chat_store.get_session(sid)["messages"]) == 3

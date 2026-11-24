@@ -96,6 +96,8 @@ def test_round_trip_over_mock_transport(tmp_path, monkeypatch):
             await asyncio.sleep(0.05)
         assert ad.status()["state"] == "open" and ad.status()["me"] == "42" and ad.status()["name"] == "@MyBot"
         assert ad.self_ids() == {"42"}
+        cmds = next(b for meth, b in calls if meth == "setMyCommands")["commands"]
+        assert {"clear", "compact"} <= {c["command"] for c in cmds}
         assert inbound[0].text == "hello" and inbound[0].session_key == "telegram:acct:12345"
         assert not inbound[1].attachments and inbound[1].attachment_loader  # deferred until policy allows
         await inbound[1].load_attachments()

@@ -35,6 +35,15 @@ MAX_MEDIA_BYTES = int(os.environ.get("VW_TELEGRAM_MAX_MEDIA_BYTES", str(20 * 102
 POLL_TIMEOUT_S = 30
 
 
+#: Shown in Telegram's "/" menu; handled by the channel manager.
+BOT_COMMANDS = [
+    {"command": "clear", "description": "Start the conversation over"},
+    {"command": "compact", "description": "Summarize earlier turns to free up context"},
+    {"command": "status", "description": "Which agent and model answer"},
+    {"command": "help", "description": "List commands"},
+]
+
+
 def parse_update(account_id: str, update: dict, *, bot_id: str, bot_username: str) -> InboundMessage | None:
     """Normalize one Bot API update (``message`` only) into an InboundMessage.
     Media is left as ``raw["media"]`` for the adapter to download."""
@@ -142,6 +151,10 @@ class TelegramAdapter(ChannelAdapter):
             me = data["result"]
             self._bot_id = str(me.get("id"))
             self._username = me.get("username") or ""
+            try:  # best-effort: populate Telegram's "/" command menu
+                await c.post(self._url("setMyCommands"), json={"commands": BOT_COMMANDS})
+            except Exception:  # noqa: BLE001
+                logger.debug("telegram setMyCommands failed", exc_info=True)
             self._set_status("open", me=self._bot_id, name=f"@{self._username}" if self._username else me.get("first_name"),
                              detail="long polling")
             while not self._stop.is_set():

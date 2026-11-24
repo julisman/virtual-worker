@@ -112,6 +112,55 @@ def load_history(session_id: str, turns: int = 20) -> list[dict]:
     return out[-max(0, turns):]
 
 
+def command_name(text: str | None) -> str:
+    """The slash command a message starts with, lower-cased, or ``""``.
+
+    Only the first word counts (``/reset please`` is ``/reset``), and a Telegram
+    group-style ``/cmd@SomeBot`` suffix is dropped."""
+    t = (text or "").strip()
+    if not t.startswith("/"):
+        return ""
+    return t.split(maxsplit=1)[0].split("@", 1)[0].lower()
+
+
+#: Messages left verbatim after a ``/compact`` (matches the Playground default).
+COMPACT_KEEP_RECENT = 4
+_COMPACT_MIN_CHARS = 1500
+COMPACT_RECAP_PREFIX = "[Recap of earlier conversation — compacted on request:]\n"
+
+
+async def _summarize(agent: dict | None, messages: list[dict]) -> str:
+    """Test seam: summarize ``messages`` with the agent's model target."""
+    from agent.summarize import summarize_messages
+    from gateway.providers import resolve_target
+    model, target = await resolve_target(agent, None)
+    return await summarize_messages(model, messages, provider=target)
+
+
+async def compact_session(agent: dict | None, session_id: str,
+                          keep_recent: int = COMPACT_KEEP_RECENT) -> str:
+    """Fold the older turns of a channel conversation into one recap message,
+    keeping the last ``keep_recent`` verbatim (the channel ``/compact``).
+    Returns the text to send back to the user."""
+    sess = chat_store.get_session(session_id)
+    msgs = [m for m in (sess or {}).get("messages", [])
+            if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()]
+    keep = max(0, min(keep_recent, len(msgs)))
+    head, tail = msgs[:len(msgs) - keep], msgs[len(msgs) - keep:]
+    if len(head) < 2 or sum(len(m["content"]) for m in head) < _COMPACT_MIN_CHARS:
+        return "Nothing to compact yet — the conversation is still short."
+    summary = (await _summarize(agent, [{"role": m["role"], "content": m["content"]}
+                                        for m in head])).strip()
+    if not summary:
+        return "Compaction failed — try again, or send /clear to start over."
+    recap = {"role": "assistant", "content": COMPACT_RECAP_PREFIX + summary,
+             "meta": {"compacted": True, "compactedCount": len(head)}}
+    chat_store.upsert_session(session_id, (sess or {}).get("title") or "", (sess or {}).get("model"),
+                              [recap] + tail, agent_id=(sess or {}).get("agentId"))
+    return (f"Compacted {len(head)} earlier messages into a summary; "
+            f"kept the last {len(tail)} as-is.")
+
+
 class ChannelManager:
     def __init__(self) -> None:
         self._adapters: dict[str, base.ChannelAdapter] = {}
@@ -326,13 +375,22 @@ class ChannelManager:
         cfg = acct["config"]
         session_id = session_override or msg.session_key
         tools_used: list[str] = []
-        cmd = (msg.text or "").strip().lower()
-        if cmd in ("/reset", "/new"):
+        cmd = command_name(msg.text)
+        if cmd in ("/reset", "/new", "/clear"):
             chat_store.delete_session(session_id)
             await self._send(acct["id"], msg.conversation_id, "Conversation reset.",
                              reply_to=msg.event_id, source="command")
             return
         agent = agent_override or self.resolve_agent(acct, msg)
+        if cmd == "/compact":
+            try:
+                reply = await compact_session(agent, session_id)
+            except Exception:  # noqa: BLE001
+                logger.warning("channel compact failed (%s)", session_id, exc_info=True)
+                reply = "Compaction failed — try again, or send /clear to start over."
+            await self._send(acct["id"], msg.conversation_id, reply,
+                             reply_to=msg.event_id, source="command")
+            return
         if cmd == "/status":
             name = (agent or {}).get("name") or "assistant"
             model = (agent or {}).get("model") or "active local model"
@@ -342,7 +400,8 @@ class ChannelManager:
             return
         if cmd == "/help":
             await self._send(acct["id"], msg.conversation_id,
-                             "Commands: /reset (start over), /status, /help"
+                             "Commands: /clear (start over; also /reset, /new), "
+                             "/compact (summarize earlier turns to free up context), /status, /help"
                              + (", /code (Claude Code), /codex (Codex)" if ((agent or {}).get("guardrails") or {}).get("codingHarness") else "")
                              + ". Otherwise just write to me.", reply_to=msg.event_id, source="command")
             return
