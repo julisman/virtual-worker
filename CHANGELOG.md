@@ -47,6 +47,12 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Fixed
 
+- Chat channels: `/clear` and `/compact` now work on Telegram, WhatsApp, Discord and Slack.
+  Before this fix they reached the model as plain text. `/clear` is an alias of `/reset` and `/new`;
+  `/compact` folds the older turns of the conversation into one recap and keeps the last
+  four messages. Commands are matched on their first word, so `/reset now` and Telegram's
+  `/clear@YourBot` both work, and the Telegram bot registers its commands for the "/" menu.
+
 - Models: a model server that crashed while loading was reported as still loading
   for up to five minutes, because the exited process was never reaped. It now fails
   at once with the server's error, and an `unknown model architecture` error says to

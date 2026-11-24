@@ -218,7 +218,7 @@ No adapter runs an agent or enforces policy.
 inbound → dedup (chat_events) → policy (dm: open | pairing | allowlist;
 group: mention | open | allowlist | off) → resolve agent (binding → account
 default → default agent) → per-conversation queue + debounce → slash commands
-(/reset /status /help) → history replay with tool-provenance notes →
+(/clear|/reset|/new /compact /status /help) → history replay with tool-provenance notes →
 execute_turn via runner (timeout, typing, "working on it" ack) → strip
 reasoning and provenance notes → persist both turns to chat_sessions →
 split to the transport's size cap and send → delivery audit + activity entry
