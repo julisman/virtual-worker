@@ -82,6 +82,9 @@ _MTP_N_MAX_MIN, _MTP_N_MAX_MAX = 1, 8
 #   state: "idle" (adopted/untested) | "verifying" | "ok" | "failed"
 _verify: dict = {"state": "idle", "error": None, "path": None}
 _verify_task = None
+# Prompt-cache warm-up after a fresh start (agent/warmup.py): state + task.
+_warmup: dict = {"state": "idle", "path": None}
+_warmup_task = None
 
 
 # --------------------------------------------------------------------------- #
@@ -275,6 +278,8 @@ async def _run_verify(path: str, port: int) -> None:
             r = await client.post(f"{_base_url(port)}/v1/chat/completions", json=payload)
         if r.status_code // 100 == 2:
             _verify = {"state": "ok", "error": None, "path": path}
+            if _state.get("warm") and _state.get("backend") == "llamacpp" and config.WARMUP_AGENTS:
+                _start_warmup(path, port)
             return
         msg = f"generation probe failed (HTTP {r.status_code}): {r.text[:600]}"
     except Exception as exc:  # noqa: BLE001 — connection reset = server crashed on load
@@ -289,6 +294,36 @@ async def _run_verify(path: str, port: int) -> None:
     _clear_state()
     _clear_pref()
     _invalidate_model_cache()
+
+
+def _start_warmup(path: str, port: int) -> None:
+    global _warmup_task
+    _cancel_warmup()
+    _warmup.update(state="warming", path=path)
+    try:
+        _warmup_task = asyncio.get_running_loop().create_task(_run_warmup(path, port))
+    except RuntimeError:  # no running loop
+        _warmup.update(state="idle", path=None)
+
+
+async def _run_warmup(path: str, port: int) -> None:
+    """Prefill the prompt cache for recently used agents (best-effort)."""
+    try:
+        from agent import warmup  # lazy: the runtime layer doesn't import agents at load
+        await warmup.warm(port)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a failed warm-up never affects the model
+        logger.debug("prompt warm-up failed", exc_info=True)
+    finally:
+        if _warmup.get("path") == path:
+            _warmup.update(state="idle", path=None)
+
+
+def _cancel_warmup() -> None:
+    if _warmup_task and not _warmup_task.done():
+        _warmup_task.cancel()
+    _warmup.update(state="idle", path=None)
 
 
 def _explain(error: str | None) -> str | None:
@@ -406,6 +441,7 @@ def stop(clear_pref: bool = True) -> dict:
     global _verify
     if _verify_task and not _verify_task.done():
         _verify_task.cancel()
+    _cancel_warmup()
     pid = _state.get("pid")
     if pid:
         _kill(pid)
@@ -438,7 +474,7 @@ async def _free_port(port: int) -> bool:
 async def start(path: str, ctx: int | None = None, ngl: int | None = None,
                 force: bool = False, adapter: str | None = None,
                 mtp: bool = False, mtp_n_max: int = _MTP_N_MAX_DEFAULT,
-                thinking: str | None = None) -> dict:
+                thinking: str | None = None, warm: bool = True) -> dict:
     """Switch the active model: stop the current server, start one on `path`.
     Returns immediately with state 'loading'; poll status() for health.
     ``force=True`` takes over the port from an existing llama-server.
@@ -448,6 +484,8 @@ async def start(path: str, ctx: int | None = None, ngl: int | None = None,
     MTP head (llama.cpp GGUF only; ignored for MLX); ``mtp_n_max`` is the draft
     depth. ``thinking`` (off/low/medium/high, llama.cpp only) pins the chat
     template's thinking level for every request that doesn't set its own.
+    ``warm`` prefills the prompt cache for recently used agents once the model
+    passes its probe (llama.cpp only; benchmarks pass False so timings stay cold).
     Raises ValueError for a request that can't work (an adapter or projector as
     the base, a mismatched adapter, an unsupported thinking level)."""
     p = Path(path)
@@ -507,7 +545,7 @@ async def start(path: str, ctx: int | None = None, ngl: int | None = None,
                  template_kwargs)
     _state.update({"pid": pid, "path": str(p), "ctx": ctx, "ngl": ngl, "backend": backend,
                    "adapter": adapter, "mtp": mtp, "mtpNMax": int(mtp_n_max), "thinking": thinking,
-                   "started_at": time.time(), "managed": True})
+                   "warm": bool(warm), "started_at": time.time(), "managed": True})
     _save_state()
     _save_pref(str(p), ctx, ngl, backend, adapter, mtp, mtp_n_max, thinking)  # remember across restarts
     _invalidate_model_cache()
@@ -564,6 +602,8 @@ async def status() -> dict:
         "mtpNMax": _state.get("mtpNMax", _MTP_N_MAX_DEFAULT),
         "adapter": _state.get("adapter"),
         "thinking": _state.get("thinking"),
+        "warming": healthy and _warmup.get("state") == "warming"
+                   and _warmup.get("path") == _state.get("path"),
         "binAvailable": bool(shutil.which(config.llama_bin())),  # back-compat (llama.cpp)
         "binLlamacpp": bool(shutil.which(config.llama_bin())),
         "binMlx": _mlx_lm_available(),

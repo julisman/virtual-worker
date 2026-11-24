@@ -194,6 +194,7 @@ All state lives under **`VW_HOME`** (default `~/.virtual-worker`; `dev.sh` sets 
 | `VW_GATEWAY_KEY` | – | require a static key on the gateway |
 | `VW_DEBUG_CAPTURE` | `1` | capture model calls into the trace store |
 | `VW_SKIP_MLX` | `0` | skip the MLX engines on Apple Silicon |
+| `VW_WARMUP_AGENTS` | `1` | after a model is activated, prefill the prompt cache for this many recently used agents (0 = off) |
 | `LLAMA_*` / `MLX_*` | – | engine binaries, port, ctx, GPU layers |
 | `HF_TOKEN` | – | gated/private Hugging Face repos |
 | `VW_ALLOWED_HOSTS` / `VW_CORS_ORIGINS` | – | extra Host names / browser origins (local ones are always allowed) |

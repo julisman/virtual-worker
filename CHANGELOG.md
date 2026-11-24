@@ -8,6 +8,13 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Added
 
+- Models: prompt-cache warm-up. After a llama.cpp model is activated and passes its
+  probe, the most recently used agent's fixed prompt start (its tool definitions and
+  system prompt, built exactly like a new session's first turn) is prefilled into the
+  server's cache, so the first message of a new session only processes what's new.
+  With a 10.4K-token agent on Inkling 2 Mini: 516 tokens processed instead of 10,441,
+  first text after 40 s instead of 95 s. The Models header shows "warming cache…";
+  evals skip it. `VW_WARMUP_AGENTS` sets how many agents to warm (default 1, 0 = off).
 - Models: LoRA adapters for GGUF models. On Device tags each GGUF as a model, a LoRA
   adapter or a vision projector (from its `general.type`), and only models get
   **Activate**. A base model offers an adapter menu listing the adapters built for its
