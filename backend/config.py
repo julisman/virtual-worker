@@ -160,6 +160,10 @@ LLAMA_PORT = int(os.environ.get("LLAMA_PORT", "8080"))
 LLAMA_CTX = int(os.environ.get("LLAMA_CTX", "32768"))
 LLAMA_NGL = int(os.environ.get("LLAMA_NGL", "99"))  # offload all layers to GPU/Metal
 MANAGED_LLAMA = os.environ.get("VW_MANAGED_LLAMA", "1") not in ("0", "false", "False")
+# After a model is activated, prefill the prompt cache with the most recently used
+# agent(s)' fixed prompt start (tool definitions + system prompt), so the first real
+# message only processes what's new. 0 disables. See agent/warmup.py.
+WARMUP_AGENTS = max(0, int(os.environ.get("VW_WARMUP_AGENTS", "1") or 0))
 
 # Upstream OpenAI-compatible inference server the /v1 proxy forwards to. In
 # managed mode it's our llama-server on LLAMA_PORT; override to point elsewhere

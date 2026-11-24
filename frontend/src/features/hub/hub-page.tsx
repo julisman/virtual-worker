@@ -60,6 +60,7 @@ interface RuntimeStatus {
   mtp?: boolean; mtpNMax?: number;
   adapter?: string | null;
   thinking?: string | null;
+  warming?: boolean;   // prefilling the prompt cache for recently used agents
   error: string | null;
 }
 
@@ -378,10 +379,10 @@ export function HubPage() {
   // confirming it can actually generate — keep polling so a late failure (e.g. an
   // unsupported MoE) flips the chip to "Load failed" without a manual refresh.
   useEffect(() => {
-    if (!runtime?.verifying) return;
+    if (!runtime?.verifying && !runtime?.warming) return;
     const t = setInterval(refreshRuntime, 2500);
     return () => clearInterval(t);
-  }, [runtime?.verifying, refreshRuntime]);
+  }, [runtime?.verifying, runtime?.warming, refreshRuntime]);
 
   const activate = useCallback(async (m: LocalModel, force = false) => {
     const path = m.path!;
@@ -451,6 +452,7 @@ export function HubPage() {
               {runtime.adapter ? <span className="text-success/70" title={runtime.adapter}>+ LoRA {runtime.adapter.split("/").pop()?.replace(/\.gguf$/, "")}</span> : null}
               {runtime.thinking ? <span className="text-success/70" title="Thinking level pinned in the chat template">· thinking {runtime.thinking}</span> : null}
               {runtime.mtp ? <span className="text-success/70" title={`Multi-token prediction on (draft depth ${runtime.mtpNMax ?? 3})`}>· MTP</span> : null}
+              {runtime.warming ? <span className="text-success/70" title="Preparing recently used agents' prompts so their first message answers faster">· warming cache…</span> : null}
               {runtime.verifying ? <span className="text-success/70" title="Confirming the model can generate…">· verifying…</span> : null}
               <button onClick={stopRuntime} title="Stop" className="ml-1 text-success/70 hover:text-success">✕</button>
             </span>

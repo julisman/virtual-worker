@@ -170,7 +170,8 @@ async def _snapshot_active() -> dict | None:
 
 async def _activate(path: str, ctx: int | None = None) -> dict:
     from runtime import llama_manager
-    return await llama_manager.start(path, ctx=ctx, force=True)
+    # No prompt warm-up: it would run alongside the benchmark and skew its timings.
+    return await llama_manager.start(path, ctx=ctx, force=True, warm=False)
 
 
 async def _wait_healthy(timeout: float = _ACTIVATE_TIMEOUT_S) -> bool:
