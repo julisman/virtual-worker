@@ -61,9 +61,9 @@ def _read_gguf_value(f, t: int):
     raise ValueError(f"unknown GGUF value type {t}")
 
 
-def read_gguf_meta(path: str) -> dict | None:
-    """Parse a GGUF header → {maxCtx, nLayers, nKvHeads, headDim} (best-effort).
-    Returns None on any error — callers treat missing metadata as 'unknown'."""
+def _read_gguf_kv(path: str) -> dict | None:
+    """Parse a GGUF header's metadata → {key: scalar/string} (arrays skipped).
+    Returns None on any error."""
     try:
         with open(path, "rb") as f:
             if f.read(4) != b"GGUF":
@@ -79,8 +79,84 @@ def read_gguf_meta(path: str) -> dict | None:
                 val = _read_gguf_value(f, t)
                 if val is not None:                 # keep scalars/strings only
                     kv[key] = val
+            return kv
     except Exception as exc:  # noqa: BLE001 — never crash the catalog scan
         logger.debug("gguf parse failed for %s: %s", path, exc)
+        return None
+
+
+_kind_cache: dict[tuple[str, int], dict] = {}
+
+
+def gguf_kind(path: str, size_bytes: int | None = None) -> dict:
+    """What a GGUF file is → {"kind": "model" | "adapter" | "mmproj", "arch": str | None}.
+
+    llama.cpp writes ``general.type``: "adapter" for LoRA adapters (served with
+    ``--lora`` on top of a base of the same ``general.architecture``) and
+    "mmproj" for vision projectors. Neither loads on its own. Files without the
+    key (older conversions) are assumed to be models. Memoized on (path, size)."""
+    key = (path, size_bytes or 0)
+    if key in _kind_cache:
+        return _kind_cache[key]
+    kv = _read_gguf_kv(path) or {}
+    gtype = kv.get("general.type")
+    arch = kv.get("general.architecture")
+    kind = gtype if gtype in ("adapter", "mmproj") else "model"
+    if kind == "model" and arch == "clip":  # older mmproj files lack general.type
+        kind = "mmproj"
+    template = kv.get("tokenizer.chat_template")
+    info = {"kind": kind, "arch": arch if isinstance(arch, str) else None,
+            "thinking": thinking_options(template if isinstance(template, str) else "")}
+    _kind_cache[key] = info
+    return info
+
+
+# --------------------------------------------------------------------------- #
+# Thinking controls in the chat template
+# --------------------------------------------------------------------------- #
+# Templates expose thinking through chat_template_kwargs, with no common spelling:
+# Qwen3-style templates take `enable_thinking` (+ `reasoning_effort` low/medium/high
+# on newer ones); Inkling takes `reasoning_effort` none…max and defaults to 0.9;
+# gpt-oss takes low/medium/high. One menu (off/low/medium/high) is mapped onto
+# whichever knobs the template reads.
+
+THINKING_LEVELS = ("off", "low", "medium", "high")
+
+
+def thinking_options(template: str) -> list[str]:
+    """The THINKING_LEVELS this chat template can be set to ([] = no knob)."""
+    effort = "reasoning_effort" in template
+    toggle = "enable_thinking" in template
+    opts = []
+    if toggle or (effort and '"none"' in template):
+        opts.append("off")
+    if effort:
+        opts += ["low", "medium", "high"]
+    return opts
+
+
+def thinking_kwargs(template_opts: list[str], template_has_toggle: bool, level: str) -> dict:
+    """chat_template_kwargs for a THINKING_LEVELS value."""
+    if level not in template_opts:
+        raise ValueError(f"thinking level {level!r} isn't supported by this model's chat template")
+    if level == "off":
+        return {"enable_thinking": False} if template_has_toggle else {"reasoning_effort": "none"}
+    return {"reasoning_effort": level}
+
+
+def gguf_thinking_kwargs(path: str, level: str) -> dict:
+    """chat_template_kwargs that set a GGUF model's thinking to ``level``."""
+    kv = _read_gguf_kv(path) or {}
+    template = kv.get("tokenizer.chat_template")
+    template = template if isinstance(template, str) else ""
+    return thinking_kwargs(thinking_options(template), "enable_thinking" in template, level)
+
+
+def read_gguf_meta(path: str) -> dict | None:
+    """Parse a GGUF header → {maxCtx, nLayers, nKvHeads, headDim} (best-effort).
+    Returns None on any error — callers treat missing metadata as 'unknown'."""
+    kv = _read_gguf_kv(path)
+    if kv is None:
         return None
 
     arch = kv.get("general.architecture")

@@ -27,6 +27,7 @@ import httpx
 
 import config
 from config import APP_HOME, LLAMA_CTX, LLAMA_NGL, LLAMA_PORT
+from runtime import model_meta
 from storage import settings
 
 
@@ -112,10 +113,11 @@ def _clear_state():
 
 
 def _save_pref(path: str, ctx: int, ngl: int, backend: str = "llamacpp",
-               adapter: str | None = None, mtp: bool = False, mtp_n_max: int = _MTP_N_MAX_DEFAULT):
+               adapter: str | None = None, mtp: bool = False, mtp_n_max: int = _MTP_N_MAX_DEFAULT,
+               thinking: str | None = None):
     settings.set(_ACTIVE_MODEL_KEY,
                  {"path": path, "ctx": ctx, "ngl": ngl, "backend": backend, "adapter": adapter,
-                  "mtp": bool(mtp), "mtpNMax": int(mtp_n_max)})
+                  "mtp": bool(mtp), "mtpNMax": int(mtp_n_max), "thinking": thinking})
 
 
 def _load_pref() -> dict | None:
@@ -139,6 +141,17 @@ def _clear_pref():
 def _pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
+    # A server we spawned that has exited stays a zombie until reaped, and
+    # kill(pid, 0) succeeds on zombies — a crash on load (e.g. an unsupported
+    # architecture) would look like a slow load until the verify timeout.
+    try:
+        reaped, _ = os.waitpid(pid, os.WNOHANG)
+        if reaped == pid:
+            return False
+    except ChildProcessError:
+        pass  # not our child (adopted after a reload) — fall through to the probe
+    except OSError:
+        pass
     try:
         os.kill(pid, 0)
         return True
@@ -278,6 +291,14 @@ async def _run_verify(path: str, port: int) -> None:
     _invalidate_model_cache()
 
 
+def _explain(error: str | None) -> str | None:
+    """Prefix a known load failure with what to do about it."""
+    if error and "unknown model architecture" in error:
+        return ("This model needs a newer llama.cpp than the one installed. Update llama.cpp "
+                "in Settings → Inference engines, then activate the model again.\n\n" + error)
+    return error
+
+
 def _log_tail(n: int = 25) -> str:
     try:
         lines = _LOG_FILE.read_text(errors="replace").splitlines()
@@ -323,7 +344,8 @@ def _mlx_args(path: str, port: int, console: str, module: str, adapter: str | No
 
 
 def _spawn(path: str, ctx: int, ngl: int, port: int, backend: str, adapter: str | None = None,
-           mtp: bool = False, mtp_n_max: int = _MTP_N_MAX_DEFAULT) -> int:
+           mtp: bool = False, mtp_n_max: int = _MTP_N_MAX_DEFAULT,
+           template_kwargs: dict | None = None) -> int:
     APP_HOME.mkdir(parents=True, exist_ok=True)
     if backend == "mlx-vlm":  # vision/audio models — MLX manages ctx/GPU itself
         args = _mlx_args(path, port, config.mlx_vlm_bin(), "mlx_vlm.server", adapter)
@@ -340,6 +362,10 @@ def _spawn(path: str, ctx: int, ngl: int, port: int, backend: str, adapter: str 
             "--ctx-size", str(ctx), "--n-gpu-layers", str(ngl),
             "--jinja",
         ]
+        if adapter:  # LoRA GGUF applied on top of the base at load time
+            args += ["--lora", adapter]
+        if template_kwargs:  # server-wide chat-template defaults (e.g. thinking level)
+            args += ["--chat-template-kwargs", json.dumps(template_kwargs)]
         if mtp:
             # Self-speculate off the model's own embedded MTP head: the draft
             # reuses the loaded weights (no second model in memory), and output
@@ -411,7 +437,8 @@ async def _free_port(port: int) -> bool:
 
 async def start(path: str, ctx: int | None = None, ngl: int | None = None,
                 force: bool = False, adapter: str | None = None,
-                mtp: bool = False, mtp_n_max: int = _MTP_N_MAX_DEFAULT) -> dict:
+                mtp: bool = False, mtp_n_max: int = _MTP_N_MAX_DEFAULT,
+                thinking: str | None = None) -> dict:
     """Switch the active model: stop the current server, start one on `path`.
     Returns immediately with state 'loading'; poll status() for health.
     ``force=True`` takes over the port from an existing llama-server.
@@ -419,13 +446,34 @@ async def start(path: str, ctx: int | None = None, ngl: int | None = None,
     that aren't fused into a standalone model).
     ``mtp`` enables llama.cpp self-speculative decoding off the model's embedded
     MTP head (llama.cpp GGUF only; ignored for MLX); ``mtp_n_max`` is the draft
-    depth."""
+    depth. ``thinking`` (off/low/medium/high, llama.cpp only) pins the chat
+    template's thinking level for every request that doesn't set its own.
+    Raises ValueError for a request that can't work (an adapter or projector as
+    the base, a mismatched adapter, an unsupported thinking level)."""
     p = Path(path)
     backend = _backend_for(path)
     mtp = bool(mtp) and backend == "llamacpp"  # MTP is a llama.cpp feature only
+    thinking = (thinking or None) if backend == "llamacpp" else None
+    template_kwargs = None
     if backend == "llamacpp":
         if not p.is_file() or p.suffix.lower() != ".gguf":
             raise FileNotFoundError(f"not a GGUF file on disk: {path}")
+        base_kind = model_meta.gguf_kind(str(p))
+        if base_kind["kind"] != "model":
+            raise ValueError(f"{p.name} is a {base_kind['kind']} file, not a model — "
+                               "activate a base model and pick it from there")
+        if adapter:
+            a = Path(adapter)
+            if not a.is_file() or a.suffix.lower() != ".gguf":
+                raise FileNotFoundError(f"adapter is not a GGUF file on disk: {adapter}")
+            a_kind = model_meta.gguf_kind(str(a))
+            if a_kind["kind"] != "adapter":
+                raise ValueError(f"{a.name} is not a LoRA adapter GGUF")
+            if a_kind["arch"] and base_kind["arch"] and a_kind["arch"] != base_kind["arch"]:
+                raise ValueError(f"adapter {a.name} is for {a_kind['arch']} models, "
+                                   f"but {p.name} is {base_kind['arch']}")
+        if thinking:  # ValueError if the template has no such level
+            template_kwargs = model_meta.gguf_thinking_kwargs(str(p), thinking)
         llama = config.llama_bin()
         if not (shutil.which(llama) or os.path.exists(llama)):
             raise RuntimeError(f"{llama} not found — install llama.cpp (brew install llama.cpp)")
@@ -455,12 +503,13 @@ async def start(path: str, ctx: int | None = None, ngl: int | None = None,
 
     ctx = ctx or LLAMA_CTX
     ngl = ngl if ngl is not None else LLAMA_NGL
-    pid = _spawn(str(p), ctx, ngl, _state["port"], backend, adapter, mtp, mtp_n_max)
+    pid = _spawn(str(p), ctx, ngl, _state["port"], backend, adapter, mtp, mtp_n_max,
+                 template_kwargs)
     _state.update({"pid": pid, "path": str(p), "ctx": ctx, "ngl": ngl, "backend": backend,
-                   "adapter": adapter, "mtp": mtp, "mtpNMax": int(mtp_n_max),
+                   "adapter": adapter, "mtp": mtp, "mtpNMax": int(mtp_n_max), "thinking": thinking,
                    "started_at": time.time(), "managed": True})
     _save_state()
-    _save_pref(str(p), ctx, ngl, backend, adapter, mtp, mtp_n_max)  # remember across restarts
+    _save_pref(str(p), ctx, ngl, backend, adapter, mtp, mtp_n_max, thinking)  # remember across restarts
     _invalidate_model_cache()
     _start_verify(str(p), _state["port"])  # confirm it can actually generate
     logger.info("started %s pid=%s model=%s", backend, pid, p.name)
@@ -513,11 +562,13 @@ async def status() -> dict:
         "ngl": _state.get("ngl"),
         "mtp": bool(_state.get("mtp")),
         "mtpNMax": _state.get("mtpNMax", _MTP_N_MAX_DEFAULT),
+        "adapter": _state.get("adapter"),
+        "thinking": _state.get("thinking"),
         "binAvailable": bool(shutil.which(config.llama_bin())),  # back-compat (llama.cpp)
         "binLlamacpp": bool(shutil.which(config.llama_bin())),
         "binMlx": _mlx_lm_available(),
         "binMlxVlm": _mlx_vlm_available(),
-        "error": error,
+        "error": _explain(error),
     }
 
 
@@ -548,7 +599,8 @@ async def adopt_or_autostart() -> dict:
             return await start(pref["path"], ctx=pref.get("ctx"), ngl=pref.get("ngl"),
                                adapter=pref.get("adapter"),
                                mtp=pref.get("mtp", False),
-                               mtp_n_max=pref.get("mtpNMax", _MTP_N_MAX_DEFAULT))
+                               mtp_n_max=pref.get("mtpNMax", _MTP_N_MAX_DEFAULT),
+                               thinking=pref.get("thinking"))
         except Exception as exc:
             logger.warning("reloading persisted model (%s) failed: %s", pref.get("path"), exc)
             return await status()

@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 _VENV_PY = sys.executable or "python3"
 
 _LLAMA_RELEASE_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+# Every upstream commit ships a "b<N>" build with prebuilt binaries, marked as a
+# pre-release; "latest" is the last versioned release and can lag new model
+# architectures by weeks. Updates take the newest build that has our binary.
+_LLAMA_RELEASES_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30"
 _LLAMA_RELEASE_DL = "https://github.com/ggml-org/llama.cpp/releases/download"
 
 # Each engine: how to read its version + how to update it.
@@ -77,6 +81,11 @@ def _llamacpp_installed() -> str | None:
     except Exception:
         return None
     text = (out.stderr or "") + (out.stdout or "")
+    # Newer builds print "version: 1.0.0 (build 12359, commit …)": report the build
+    # number, which is what release tags ("b12669") and brew bottles compare on.
+    b = re.search(r"\(build\s+(\d+)", text)
+    if b and int(b.group(1)) >= 100:  # local source builds report "build 1"
+        return b.group(1)
     m = re.search(r"version:\s*(\S+)", text)  # "version: 9301 (1c0f6db54)"
     return m.group(1) if m else None
 
@@ -108,11 +117,17 @@ def _installed(engine: dict) -> str | None:
     return _pip_installed(engine["pkg"])
 
 
+def _release_updates() -> bool:
+    """llama.cpp updates install upstream's prebuilt binary into
+    LLAMA_ENGINE_DIR (macOS) rather than `brew upgrade`: Homebrew follows the
+    versioned releases, which lag new model architectures by weeks."""
+    return platform.system() == "Darwin"
+
+
 def _can_update(engine: dict) -> bool:
     if engine["kind"] == "brew":
-        # Packaged: self-update by downloading a release binary (macOS only).
-        if config.PACKAGED:
-            return platform.system() == "Darwin"
+        if _release_updates():
+            return True
         return bool(shutil.which("brew"))
     return bool(config.uv_bin())
 
@@ -154,11 +169,32 @@ async def _brew_latest(formula: str) -> str | None:
         return None
 
 
+def _llama_asset(tag: str) -> str:
+    arch = "macos-arm64" if platform.machine() == "arm64" else "macos-x64"
+    return f"llama-{tag}-bin-{arch}.tar.gz"
+
+
+def _newest_build(releases: list[dict]) -> str | None:
+    """Newest non-draft release (pre-release builds included) that ships our binary."""
+    for rel in releases:
+        tag = rel.get("tag_name")
+        if not tag or rel.get("draft"):
+            continue
+        names = {a.get("name") for a in rel.get("assets") or []}
+        if _llama_asset(tag) in names:
+            return tag
+    return None
+
+
 async def _github_latest_llamacpp() -> str | None:
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as c:
+            r = await c.get(_LLAMA_RELEASES_API)
+            tag = _newest_build(r.json()) if r.status_code == 200 else None
+            if tag:
+                return tag  # e.g. "b12669"
             r = await c.get(_LLAMA_RELEASE_API)
-        return r.json().get("tag_name")  # e.g. "b9881"
+        return r.json().get("tag_name")
     except Exception as exc:  # noqa: BLE001
         logger.debug("github latest llama.cpp failed: %s", exc)
         return None
@@ -182,9 +218,9 @@ def _update_available(current_v: str | None, latest: str | None, kind: str) -> b
 
 async def _latest(engine: dict) -> str | None:
     if engine["kind"] == "brew":
-        # Packaged updates install GitHub release binaries, so compare against
-        # the GitHub tag; brew's formula can lag it by days.
-        if config.PACKAGED:
+        # Updates install GitHub build binaries, so compare against the newest
+        # build tag; brew's formula can lag it by weeks.
+        if _release_updates():
             return await _github_latest_llamacpp()
         return await _brew_latest(engine["formula"])
     return await _pypi_latest(engine["pkg"])
@@ -258,21 +294,47 @@ async def _ensure_mlx_venv() -> str | None:
 
 def _extract_llama_release(tar_path: Path, dest: Path) -> list[str]:
     """Copy llama-server + its dylibs/metal shaders out of a release tarball,
-    flattened into ``dest`` (basenames only — no archive paths touch disk)."""
+    flattened into ``dest`` (basenames only — no archive paths touch disk).
+
+    Release builds link the versioned names (``@rpath/libllama.1.dylib``), which
+    the tarball ships as symlinks to the real file (``libllama.1.0.0.dylib``);
+    those are recreated as same-folder links, or llama-server can't start."""
     copied: list[str] = []
     dest.mkdir(parents=True, exist_ok=True)
+
+    def wanted(name: str) -> bool:
+        return name == "llama-server" or name.endswith((".dylib", ".metal"))
+
+    def clear(target: Path) -> None:
+        if target.is_symlink() or target.exists():
+            target.unlink()
+
     with tarfile.open(tar_path, "r:gz") as tf:
+        links = []
         for member in tf.getmembers():
             name = Path(member.name).name
+            if not wanted(name):
+                continue
+            if member.issym():
+                links.append((name, member.linkname))
+                continue
             if not member.isfile():
                 continue
-            if name == "llama-server" or name.endswith((".dylib", ".metal")):
-                src = tf.extractfile(member)
-                if src is None:
-                    continue
-                with open(dest / name, "wb") as f:
-                    shutil.copyfileobj(src, f)
-                copied.append(name)
+            src = tf.extractfile(member)
+            if src is None:
+                continue
+            clear(dest / name)
+            with open(dest / name, "wb") as f:
+                shutil.copyfileobj(src, f)
+            copied.append(name)
+        for name, target in links:
+            # Only plain same-folder links to a library we kept: nothing in the
+            # archive may point outside the engine folder.
+            if "/" in target or "\\" in target or not wanted(target) or target in ("", ".", ".."):
+                continue
+            clear(dest / name)
+            os.symlink(target, dest / name)
+            copied.append(name)
     server = dest / "llama-server"
     if server.exists():
         server.chmod(0o755)
@@ -280,15 +342,15 @@ def _extract_llama_release(tar_path: Path, dest: Path) -> list[str]:
 
 
 async def _update_llamacpp_release() -> dict:
-    """Packaged-mode llama.cpp update: download the latest release binary into
-    APP_HOME/engines/llama (config.llama_bin() prefers it over the bundled copy)."""
+    """llama.cpp update (macOS): download the newest build's binary into
+    APP_HOME/engines/llama (config.llama_bin() prefers it over bundled/brew)."""
     if platform.system() != "Darwin":
         return {"ok": False, "output": "managed llama.cpp updates are macOS-only for now"}
     tag = await _github_latest_llamacpp()
     if not tag:
         return {"ok": False, "output": "could not resolve the latest llama.cpp release (network?)"}
     arch = "macos-arm64" if platform.machine() == "arm64" else "macos-x64"
-    asset = f"llama-{tag}-bin-{arch}.tar.gz"
+    asset = _llama_asset(tag)
     url = f"{_LLAMA_RELEASE_DL}/{tag}/{asset}"
     try:
         with tempfile.TemporaryDirectory(prefix="vw-llama-") as tmp:
@@ -321,7 +383,7 @@ async def update(key: str) -> dict:
     engine = _by_key(key)
     if not engine:
         return {"ok": False, "output": f"unknown engine: {key}"}
-    if engine["kind"] == "brew" and config.PACKAGED:
+    if engine["kind"] == "brew" and _release_updates():
         return await _update_llamacpp_release()
     if engine["kind"] == "pip" and _pip_target_python() == str(config.mlx_venv_python()):
         err = await _ensure_mlx_venv()

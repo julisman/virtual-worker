@@ -8,6 +8,18 @@ All notable changes to Virtual Worker are recorded here. The format follows
 
 ### Added
 
+- Models: LoRA adapters for GGUF models. On Device tags each GGUF as a model, a LoRA
+  adapter or a vision projector (from its `general.type`), and only models get
+  **Activate**. A base model offers an adapter menu listing the adapters built for its
+  architecture; the chosen one is served with llama-server's `--lora`.
+  `POST /api/runtime/start` takes `adapter` for GGUF models too, rejects (400) an adapter or
+  projector as the base and an adapter for a different architecture, and
+  `GET /api/runtime/status` reports the active `adapter`.
+- Models: a per-model thinking level (off / low / medium / high) for GGUF models whose
+  chat template has a thinking knob. It is mapped onto the template's own setting
+  (`enable_thinking` for Qwen, `reasoning_effort` for Inkling and gpt-oss) and passed
+  as llama-server's `--chat-template-kwargs`, so it holds for every client of the
+  model. `POST /api/runtime/start` takes `thinking`; it is remembered across restarts.
 - Debug: a context-window meter. Every run records its peak prompt size (the largest
   single model call, not the sum across calls), the model's context window, and the
   prompt size of each call. Runs and sessions show `ctx <used> / <window> · <pct>%`,
@@ -25,8 +37,27 @@ All notable changes to Virtual Worker are recorded here. The format follows
   sent / failed counts now cover every matching row.
 - README: a 60-second explainer video with voice-over (`docs/media/explainer.mp4`).
 
+### Changed
+
+- Engines: on macOS, updating llama.cpp installs the newest upstream build
+  (`b<N>`, pre-release builds included) into the app's engine folder, in dev and
+  service mode as well as the packaged app. The versioned "latest" release and
+  Homebrew lag new model architectures by weeks (Inkling 2 Mini needs a build from
+  20 Nov 2026 on). The installed version is reported as the build number.
+
 ### Fixed
 
+- Models: a model server that crashed while loading was reported as still loading
+  for up to five minutes, because the exited process was never reaped. It now fails
+  at once with the server's error, and an `unknown model architecture` error says to
+  update llama.cpp.
+- Evals and onboarding no longer offer LoRA adapter or projector GGUFs as chat
+  models (`textGenerative` is now set for GGUF files too).
+- Engines: installing a llama.cpp release dropped the tarball's library symlinks
+  (`libllama.1.dylib → libllama.1.0.0.dylib`), which are the names llama-server links
+  against, so the installed server couldn't start. They are now recreated as
+  same-folder links (links that point elsewhere are skipped), and files are replaced
+  rather than overwritten in place, so a running server isn't disturbed.
 - Agent loop: the empty-reply nudge reused the `_mode` variable, which switched off
   window-mode context metering for the rest of that run.
 

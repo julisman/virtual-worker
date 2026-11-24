@@ -144,7 +144,8 @@ def test_active_model_pref_roundtrip(tmp_path, monkeypatch):
     mgr._save_pref("/models/x.gguf", 4096, 99)
     assert mgr._load_pref() == {"path": "/models/x.gguf", "ctx": 4096, "ngl": 99,
                                 "backend": "llamacpp", "adapter": None,
-                                "mtp": False, "mtpNMax": mgr._MTP_N_MAX_DEFAULT}
+                                "mtp": False, "mtpNMax": mgr._MTP_N_MAX_DEFAULT,
+                                "thinking": None}
     # stored in the single settings file
     import json
     assert json.loads((tmp_path / "settings.json").read_text())["activeModel"]["ctx"] == 4096
